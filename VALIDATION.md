@@ -1,8 +1,28 @@
 # 安卓分支验证记录
 
-日期：2026-11-18（Asia/Hong_Kong），更新至 1.0.5；首版验证于 2026-11-16。上游基线 `5d5dd754ebc1948e977ddb880a9eb5aa25f37b4c`；发布分支 `android-lite`。1.0.5 为 GitHub 预发布，保留仓库的 `main` 分支。
+日期：2026-11-18（Asia/Hong_Kong）。上游基线 `5d5dd754ebc1948e977ddb880a9eb5aa25f37b4c`。1.0.6 基于 `android-lite` 上的 1.0.5 预发布；发布分支为 `android-lite`，不改 `main`。对应附件见 [v1.0.6 预发布](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.6)。
 
-## 已完成
+## 1.0.6：大备份导入与账户页
+
+使用 Windows Edge headless、模拟 Android 桥和合成 v3 ZIP，分别对 1.0.5 与 1.0.6 的生产构建单次计时。未访问真实聊天记录。`HISTORY_BENCH=1 pnpm exec playwright test history-benchmark` 可重复采样。
+
+| 合成样本 | ZIP 大小 | 文件分片读次数 | 预检 ms | 解析与暂存 ms（其中 IDB 暂存事务） | 原子提交 ms | 首次打开正文 ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 600 个会话 | 269,433 B | 5,425 → 1,809 | 385 → 24 | 1,242 → 957（215 → 154） | 149 → 147 | 34 → 45 |
+| 单会话 850 条消息 | 11,238 B | 34 → 12 | 26 → 26 | 43 → 33（6 → 7） | 5 → 11 | 534 → 559 |
+| 2 个会话含 6.75 MiB BMP | 7,080,951 B | 79 → 45 | 44 → 43 | 259 → 219（32 → 20） | 22 → 37 | 39 → 55 |
+
+- 预检截止第一笔暂存事务开始；解析与暂存包括 ZIP I/O、解压、JSON 解析、转换和暂存。提交时间从事务创建到完成。首次打开的可见性读数包含浏览器自动化等待，不单独代表渲染开销。600 条样本从确认到事务完成约 1.78 s → 1.13 s；成功文案的采样没有显示同幅下降。这是一次桌面样本，不是帧率、真机时延或真实备份兼容性保证。
+- 三个样本在导入阶段均未观察到 ≥50 ms 主线程长任务；长会话首次渲染仍相对慢，与导入解压/解析不同。本次不加入 Worker，也不改变视图渲染或数据库格式。保留路径、CRC、消息树、索引检查以及原子替换。
+- 浏览器模拟检查真实进度、提交不可取消、取消/坏包/提交存储配额失败后旧记录保留；导入后查看最新、切换会话、详情失败重试，并在重载后核对正文、分支和图片。
+- 官方余额 `OPTIONS https://api.deepseek.com/user/balance` 无 Key、无 Cookie 探测为 HTTP 200，明确允许 Android WebView 源 `https://appassets.androidplatform.net`、`GET` 和 `authorization`。没有执行真实余额 GET、模型调用或付款。
+- 余额与用量通过模拟响应覆盖延迟加载、缓存/刷新、多币种十进制、失败状态、迟到回包、断流和无效最后一帧。独立单测覆盖跨本地日期、持久化窗口与清零；诊断路径不接入余额数据，固定浏览器外链不带凭据。
+- 最终 `pnpm type`、`pnpm lint`（130 文件，零错误/警告）、生产构建、49 项 JS 单测、38 项浏览器回归（另单独运行 3 项基准）和 44 项 Android JVM 单测通过。
+- 本地 `node android/build.mjs preview --offline --no-daemon` 构建成功，Release Lint Vital 通过。`verify-apk` 校验 116 个资源及字体；`zipalign` 与 `apksigner` 验证成功。`aapt` 核对包名 `io.github.swordsifu.dsapichat`、versionName 1.0.6、versionCode 7、minSdk 26、targetSdk 35、无 `application-debuggable`，三项权限与 1.0.5 相同。
+- APK 2,227,488 字节；SHA-256 `e5686ad0efbb14e3789086102a92af4af242ac7da9ab98116f364ae7a5e99a50`。APK v2 签名有效；与本地 1.0.5 预发布产物核对为同一开发证书，证书 SHA-256 `53b689437132de29ccf69b1aecd928bc635dee47368c36e13ddd8204a3207fd7`。
+- `adb devices -l` 无设备。覆盖安装、原始大备份及实际余额和系统浏览器外跳留待真机复测；1.0.6 不改录音路径。
+
+## 1.0.5 及更早版本：已完成验证
 
 | 检查 | 结果与边界 |
 | --- | --- |

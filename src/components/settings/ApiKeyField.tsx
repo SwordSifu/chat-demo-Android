@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { IconEditOutline16 } from '../base/icons.js'
-import { useSettings } from '../../services/settings.js'
+import { setApiKey, useSettings } from '../../services/settings.js'
+import { Button } from '../base/Button.js'
+import { Modal } from '../base/Modal.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { IconButton } from '../base/IconButton.js'
 import { useApiKeyForm } from './useApiKeyForm.js'
@@ -77,9 +79,60 @@ export const ApiKeyField = ({ editor }: { editor: ApiKeyEditor }) => {
             ) : null}
           </div>
         )}
+        {apiKey && editing ? <div className={styles.description}>{t('apiKeyUsageResetNotice')}</div> : null}
+        {apiKey && !editing ? <RemoveApiKey /> : null}
         {showInput && form.error ? <div className={styles.error}>{form.error}</div> : null}
       </div>
     </div>
+  )
+}
+
+const RemoveApiKey = () => {
+  const t = useTranslate()
+  const [confirm, setConfirm] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const close = () => {
+    if (!removing) {
+      setConfirm(false)
+    }
+  }
+  const remove = async () => {
+    if (removing) {
+      return
+    }
+    setRemoving(true)
+    setFailed(false)
+    try {
+      await setApiKey(null)
+      setConfirm(false)
+    } catch {
+      setFailed(true)
+    } finally {
+      setRemoving(false)
+    }
+  }
+  return (
+    <>
+      <div>
+        <Button variant="outlined" size="m" onClick={() => { setFailed(false); setConfirm(true) }}>
+          {t('apiKeyRemove')}
+        </Button>
+      </div>
+      {confirm ? (
+        <Modal title={t('apiKeyRemove')} className={styles.deleteConfirm} onClose={close}
+          footer={
+            <div className={styles.deleteActions} aria-busy={removing}>
+              <Button variant="outlined" disabled={removing} autoFocus onClick={close}>{t('cancel')}</Button>
+              <Button variant="danger" disabled={removing} onClick={() => void remove()}>{t('apiKeyRemove')}</Button>
+            </div>
+          }
+        >
+          {t('apiKeyRemoveDescription')}
+          {failed ? <p role="alert" className={styles.error}>{t('apiKeyRemoveFailed')}</p> : null}
+        </Modal>
+      ) : null}
+    </>
   )
 }
 

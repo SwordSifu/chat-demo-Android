@@ -7,7 +7,7 @@ import { toLocalSession } from './toLocal.js'
 import {
   ArchiveError,
   isZipFile,
-  readArchive,
+  openArchive,
   readEntry,
   skipEntry,
   type ArchiveEntry,
@@ -54,22 +54,25 @@ const readJson = async (entry: ArchiveEntry): Promise<unknown> => {
  * 检查 ZIP 格式、首个 manifest 条目及格式版本。
  * 校验失败时保留正在生成的回答和现有暂存数据。
  */
-export const checkArchiveFormat = async (file: File): Promise<void> => {
-  if (!(await isZipFile(file))) {
+export const checkArchiveFormat = async (file: File, signal?: AbortSignal) => {
+  signal?.throwIfAborted()
+  const isZip = await isZipFile(file)
+  signal?.throwIfAborted()
+  if (!isZip) {
     fail('backupUnrecognized')
   }
   try {
-    for await (const entry of readArchive(file)) {
-      if (entry.path !== MANIFEST_PATH) {
-        fail('backupUnrecognized')
-      }
-      checkManifest(await readJson(entry))
-      return
+    const archive = await openArchive(file, signal)
+    const manifest = await archive.entries.next()
+    if (manifest.done || manifest.value.path !== MANIFEST_PATH) {
+      return fail('backupUnrecognized')
     }
+    checkManifest(await readJson(manifest.value))
+    signal?.throwIfAborted()
+    return archive
   } catch (error) {
     throw error instanceof ArchiveError ? new BackupError('backupIncomplete') : error
   }
-  fail('backupUnrecognized')
 }
 
 /**
@@ -78,15 +81,19 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
  * 会话读完立即暂存，只保留图片路径映射；图片全部读完后逐会话回填 MIME，不改变图片身份。
  * 写入导入暂存存储；调用方负责先清空暂存，成功后替换正式数据，失败时清理暂存。
  */
-export const importArchive = async (file: File): Promise<void> => {
-  if (!(await isZipFile(file))) {
-    fail('backupUnrecognized')
-  }
+export const importArchive = async (
+  archive: Awaited<ReturnType<typeof checkArchiveFormat>>,
+  signal?: AbortSignal,
+  onProgress?: (completed: number, total: number) => void
+): Promise<void> => {
+  signal?.throwIfAborted()
+  let processed = 1 // 预检已读完并校验 manifest。
+  let lastReport = performance.now()
+  onProgress?.(processed, archive.total)
   const imported = new Set<string>()
   const images = new Map<string, string>()
   /** 已保存的原件：文件 ID → MIME。同一图片出现在多个会话目录时只保存一次。 */
   const stored = new Map<string, string>()
-  let manifest = false
   let index: SessionIndexEntry[] | undefined
   let currentSessionId: string | undefined
 
@@ -102,16 +109,11 @@ export const importArchive = async (file: File): Promise<void> => {
   }
 
   try {
-    for await (const entry of readArchive(file)) {
+    for await (const entry of archive.entries) {
+      signal?.throwIfAborted()
       const { path } = entry
       const sessionId = parseSessionPath(path)
-      if (!manifest) {
-        if (path !== MANIFEST_PATH) {
-          fail('backupUnrecognized')
-        }
-        checkManifest(await readJson(entry))
-        manifest = true
-      } else if (path === USER_PATH && !index && imported.size === 0) {
+      if (path === USER_PATH && !index && imported.size === 0) {
         // 账号信息（已脱敏）不导入；文件可能缺失。
         await skipEntry(entry)
       } else if (sessionId !== null && !index) {
@@ -138,13 +140,18 @@ export const importArchive = async (file: File): Promise<void> => {
       } else {
         fail('backupIncomplete')
       }
+      signal?.throwIfAborted()
+      processed++
+      const now = performance.now()
+      if (processed === archive.total || now - lastReport >= 100) {
+        onProgress?.(processed, archive.total)
+        lastReport = now
+      }
     }
   } catch (error) {
     throw error instanceof ArchiveError ? new BackupError('backupIncomplete') : error
   }
-  if (!manifest) {
-    fail('backupUnrecognized')
-  }
+  signal?.throwIfAborted()
   // index 只列出成功写出的会话，与会话文件一一对应。
   const listed = new Set(index?.map((entry) => entry.id))
   if (
@@ -155,5 +162,7 @@ export const importArchive = async (file: File): Promise<void> => {
   ) {
     fail('backupIncomplete')
   }
-  await db.updateStagingFileTypes(stored)
+  if (stored.size > 0) {
+    await db.updateStagingFileTypes(stored, signal)
+  }
 }

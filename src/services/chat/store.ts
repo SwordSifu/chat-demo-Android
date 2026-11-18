@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { isAndroid } from '../../platform/android.js'
 import { createId } from '../../utils/id.js'
+import { captureUsageGeneration, parseChatTokenUsage, recordChatUsage, type ChatTokenUsage } from '../account/usage.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import type { ChatModel, CreateMessageRequest } from '../api/types.js'
 import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
@@ -385,7 +386,11 @@ const waitForIdle = (sessionId?: string) =>
  * 替换历史对话：先写入暂存，成功后原子替换旧记录；写入为空即删除全部会话与附件。
  * 期间停止生成并禁止修改会话；失败时清除暂存，保留原有记录。
  */
-export const replaceHistory = async (write: () => Promise<void>): Promise<number> => {
+export const replaceHistory = async (
+  write: () => Promise<void>,
+  { signal, onCommit }: { signal?: AbortSignal; onCommit?: () => void } = {}
+): Promise<{ count: number; latestId: string | null }> => {
+  signal?.throwIfAborted()
   if (get().importingHistory) {
     throw new Error('History replacement is already in progress')
   }
@@ -396,14 +401,20 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
     }
     // 已开始的单条删除先同步到内存，避免本次替换失败后列表残留已被删除的记录。
     await Promise.all(deletionTasks)
+    signal?.throwIfAborted()
     historyEpoch += 1
     initTask = undefined
     sessionLoads.clear()
     await waitForIdle()
+    signal?.throwIfAborted()
     await db.clearStaging()
     let summaries: SessionSummary[]
     try {
+      signal?.throwIfAborted()
       await write()
+      signal?.throwIfAborted()
+      // 从这里起事务不可由界面取消；失败仍会由 IndexedDB 回滚。
+      onCommit?.()
       summaries = await db.commitStaging()
     } catch (error) {
       await db.clearStaging().catch(db.reportStorageError('clear unfinished history replacement'))
@@ -422,7 +433,13 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
       sessionSaveErrors: {},
       activeId: null,
     })
-    return summaries.length
+    let latest: SessionSummary | undefined
+    for (const summary of summaries) {
+      if (!latest || summary.updatedAt > latest.updatedAt) {
+        latest = summary
+      }
+    }
+    return { count: summaries.length, latestId: latest?.id ?? null }
   } finally {
     set({ importingHistory: false })
     retrySaveSessions()
@@ -1000,6 +1017,8 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         // Read live settings after uploads and again on each retry, not a render/session snapshot.
         // An HTTP body already sent to the server cannot be changed by toggling this preference.
         const { apiKey, safetyCheck } = useSettings.getState()
+        const usageGeneration = captureUsageGeneration()
+        let finalUsage: ChatTokenUsage | null = null
         const events = streamMessage(
           apiKey ?? '',
           {
@@ -1015,6 +1034,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         )
         const blockIndexes = new Map<number, number>()
         for await (const event of events) {
+          if (event.type === 'message_delta') {
+            finalUsage = parseChatTokenUsage(event.usage)
+          }
           receivedContent ||= event.type === 'content_block_start'
           if (
             event.type === 'message_delta' &&
@@ -1037,6 +1059,10 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           } else {
             frame ||= requestAnimationFrame(flush)
           }
+        }
+        // The iterator returns normally only after message_stop. EOF/error/abort don't record.
+        if (finalUsage && !controller.signal.aborted) {
+          recordChatUsage(usageGeneration, finalUsage)
         }
         reply = settleReply(reply, 'done', Date.now())
         break

@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { getNativeApiKey, isAndroid, saveNativeApiKey } from '../platform/android.js'
+import { accountBalance } from './account/balance.js'
+import { localUsage } from './account/usage.js'
 import type { TtsVoice } from './api/speech.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
@@ -128,11 +130,17 @@ export const setApiKey = async (apiKey: string | null) => {
   if (isAndroid()) {
     await saveNativeApiKey(apiKey)
     // A legacy plaintext entry must never survive a successful secure save.
+    write(KEYS.apiKey, null)
+  } else if (apiKey === null) {
     localStorage.removeItem(KEYS.apiKey)
   } else {
-    write(KEYS.apiKey, apiKey)
+    localStorage.setItem(KEYS.apiKey, apiKey)
   }
-  useSettings.setState({ apiKey })
+  if (apiKey !== useSettings.getState().apiKey) {
+    localUsage.reset()
+    accountBalance.invalidate()
+    useSettings.setState({ apiKey })
+  }
 }
 
 export const setThinking = (thinking: boolean) => {

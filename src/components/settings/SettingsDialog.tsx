@@ -16,9 +16,10 @@ import {
   clearHistory,
   exportHistory,
   importHistory,
+  type ImportProgress,
 } from '../../services/chat/backup.js'
 import { useIsMobile } from '../../app/viewport.js'
-import { useChatStore } from '../../services/chat/store.js'
+import { selectSession, useChatStore } from '../../services/chat/store.js'
 import { regionCodes, getRegionName, provinces } from '../../services/location.js'
 import {
   isChineseBrowser,
@@ -35,6 +36,7 @@ import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
 import { showToast } from '../base/toastState.js'
+import { AccountSettings } from './AccountSettings.js'
 import { ApiKeyConfirm, ApiKeyField, useApiKeyEditor } from './ApiKeyField.js'
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
 import styles from './Settings.module.css'
@@ -55,6 +57,7 @@ const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode
     icon: <IconSettingsOutline16 />,
   },
   { value: 'data', label: 'settingDialogAsideDataOptionLabel', icon: <IconDataOutline16 /> },
+  { value: 'account', label: 'settingDialogAsideAccountOptionLabel', icon: null },
 ]
 
 const SettingsContent = () => {
@@ -67,7 +70,7 @@ const SettingsContent = () => {
   const historyImport = useHistoryImport()
   const historyDelete = useHistoryDelete()
   const replacingHistory = useChatStore((state) => state.importingHistory)
-  const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
+  const historyBusy = historyImport.busy || historyImport.file !== null || historyDelete.busy || replacingHistory
   return (
     <>
       <Modal
@@ -76,7 +79,7 @@ const SettingsContent = () => {
         className={styles.dialog}
         mainClassName={styles.dialogMain}
         onClose={() => {
-          if (!historyDelete.busy) {
+          if (!historyImport.busy && !historyImport.file && !historyDelete.busy) {
             closeSettings()
           }
         }}
@@ -105,6 +108,8 @@ const SettingsContent = () => {
               <TtsVoiceSetting />
               <LocationSetting />
             </>
+          ) : section === 'account' ? (
+            <AccountSettings />
           ) : (
             <>
               <ApiKeyField editor={apiKeyEditor} />
@@ -131,7 +136,7 @@ const SettingsContent = () => {
           )}
         </div>
       </Modal>
-      {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
+      {historyImport.file || historyImport.progress ? <ImportConfirm historyImport={historyImport} /> : null}
       {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
     </>
   )
@@ -385,30 +390,65 @@ const TtsVoiceSetting = () => {
   )
 }
 
-/** 覆盖导入的二次确认，叠在设置弹窗上 */
+/** 确认后原地显示进度，正式保存只可等待完成。 */
 const ImportConfirm = ({
   historyImport,
 }: {
   historyImport: ReturnType<typeof useHistoryImport>
 }) => {
   const t = useTranslate()
+  const { progress, cancelling } = historyImport
+  const progressId = useId()
+  const reading = progress?.phase === 'reading' ? progress : null
+  const progressText = cancelling
+    ? t('historyImportCancelling')
+    : reading
+      ? t('historyImportReading', { completed: reading.completed, total: reading.total })
+      : t(progress?.phase === 'saving' ? 'historyImportSaving' : 'historyImportChecking')
+
   return (
     <Modal
-      title={t('historyImportConfirmTitle')}
+      title={t(progress ? 'historyImport' : 'historyImportConfirmTitle')}
       className={styles.importConfirm}
-      onClose={historyImport.cancel}
+      onClose={historyImport.dismissConfirm}
       footer={
-        <>
-          <Button variant="outlined" size="m" autoFocus onClick={historyImport.cancel}>
-            {t('cancel')}
-          </Button>
-          <Button variant="dangerOutlined" size="m" onClick={() => void historyImport.confirm()}>
-            {t('historyImportConfirm')}
-          </Button>
-        </>
+        progress ? (
+          progress.phase !== 'saving' ? (
+            <Button
+              key="cancel-import"
+              variant="outlined"
+              size="m"
+              autoFocus
+              disabled={cancelling}
+              onClick={historyImport.cancelImport}
+            >
+              {t('historyImportCancel')}
+            </Button>
+          ) : null
+        ) : (
+          <>
+            <Button variant="outlined" size="m" autoFocus onClick={historyImport.dismissConfirm}>
+              {t('cancel')}
+            </Button>
+            <Button variant="dangerOutlined" size="m" onClick={() => void historyImport.confirm()}>
+              {t('historyImportConfirm')}
+            </Button>
+          </>
+        )
       }
     >
-      <div className={styles.importConfirmText}>{t('historyImportConfirmDescription')}</div>
+      {progress ? (
+        <div className={styles.importProgress}>
+          <div id={progressId} role="status">{progressText}</div>
+          <progress
+            aria-labelledby={progressId}
+            max={reading?.total || undefined}
+            value={cancelling || !reading?.total ? undefined : reading.completed}
+          />
+        </div>
+      ) : (
+        <div className={styles.importConfirmText}>{t('historyImportConfirmDescription')}</div>
+      )}
     </Modal>
   )
 }
@@ -481,6 +521,7 @@ const SettingCell = ({
   description,
   descriptionId,
   status,
+  statusAction,
   action,
   className,
 }: {
@@ -488,6 +529,7 @@ const SettingCell = ({
   description?: string
   descriptionId?: string
   status: Status
+  statusAction?: ReactNode
   action: ReactNode
   className?: string
 }) => {
@@ -497,45 +539,103 @@ const SettingCell = ({
       <div className={styles.text}>
         <div className={styles.label}>{label}</div>
         {status || description ? (
-          <div id={descriptionId} className={clsx(styles.description, status?.error && styles.error)}>
+          <div
+            id={descriptionId}
+            className={clsx(styles.description, status?.error && styles.error)}
+            aria-live="polite"
+          >
             {status
               ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
               : description}
           </div>
         ) : null}
+        {statusAction}
       </div>
       {action}
     </div>
   )
 }
 
-/** 选文件后先提示覆盖；确认后才检查文件并执行导入，任何错误都提示导入失败。 */
+/** 选文件后先提示覆盖；确认后检查、读取，进入原子保存前才允许取消。 */
 const useHistoryImport = () => {
   const [file, setFile] = useState<File | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState<ImportProgress | null>(null)
+  const [cancelling, setCancelling] = useState(false)
   const [status, setStatus] = useState<Status>(null)
-  const importing = useRef(false)
+  const [latestId, setLatestId] = useState<string | null>(null)
+  const operation = useRef<{ controller: AbortController; saving: boolean } | null>(null)
 
   const confirm = async () => {
-    if (!file || importing.current) {
+    if (!file || operation.current) {
       return
     }
-    importing.current = true
+    const controller = new AbortController()
+    const current = { controller, saving: false }
+    operation.current = current
     setFile(null)
-    setBusy(true)
+    setProgress({ phase: 'checking' })
     setStatus(null)
+    setLatestId(null)
     try {
-      const count = await importHistory(file)
+      const { count, latestId } = await importHistory(file, {
+        signal: controller.signal,
+        onProgress: (next) => {
+          // Invalidate cancellation synchronously, before React paints the saving phase.
+          current.saving = next.phase === 'saving'
+          setProgress(next)
+        },
+      })
       setStatus({ key: count === 1 ? 'historyImportedOne' : 'historyImported', params: { count } })
-    } catch {
-      setStatus({ key: 'historyImportFailed', error: true })
+      setLatestId(latestId)
+    } catch (error) {
+      if (controller.signal.aborted && error instanceof Error && error.name === 'AbortError') {
+        setStatus({ key: 'historyImportCancelled' })
+      } else if (error instanceof Error && error.name === 'QuotaExceededError') {
+        setStatus({ key: 'historyImportQuota', error: true })
+      } else if (error instanceof BackupError) {
+        setStatus({ key: 'historyImportBackupFailed', reason: error.key, error: true })
+      } else {
+        setStatus({ key: 'historyImportFailed', error: true })
+      }
     } finally {
-      importing.current = false
-      setBusy(false)
+      operation.current = null
+      setProgress(null)
+      setCancelling(false)
     }
   }
 
-  return { file, busy, status, select: setFile, cancel: () => setFile(null), confirm }
+  return {
+    file,
+    busy: progress !== null,
+    progress,
+    cancelling,
+    status,
+    latestId,
+    select: (next: File) => {
+      if (!operation.current) {
+        setFile(next)
+      }
+    },
+    dismissConfirm: () => {
+      if (!operation.current) {
+        setFile(null)
+      }
+    },
+    cancelImport: () => {
+      const current = operation.current
+      if (current && !current.saving && !current.controller.signal.aborted) {
+        setCancelling(true)
+        current.controller.abort()
+      }
+    },
+    confirm,
+    viewImported: () => {
+      if (latestId !== null && !operation.current) {
+        selectSession(latestId)
+        closeSettings()
+      }
+    },
+  }
 }
 
 /** 导入 = 覆盖：用选中文件替换本地全部会话与附件。 */
@@ -554,6 +654,17 @@ const ImportHistory = ({
       label={t('historyImport')}
       description={t('historyImportDescription')}
       status={historyImport.status}
+      statusAction={historyImport.latestId !== null ? (
+        <Button
+          variant="outlined"
+          size="m"
+          className={styles.importViewButton}
+          disabled={disabled}
+          onClick={historyImport.viewImported}
+        >
+          {t('historyImportView')}
+        </Button>
+      ) : null}
       action={
         <>
           <Button

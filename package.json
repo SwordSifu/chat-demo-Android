@@ -8,8 +8,8 @@
   "scripts": {
     "dev": "rspack serve -c rspack.config.ts",
     "build": "node scripts/build.mjs",
-    "test": "node --test tests/unit.test.mjs tests/diagnostics.test.mjs tests/pcm.test.mjs tests/native-diagnostics.test.mjs && playwright test",
-    "test:unit": "node --test tests/unit.test.mjs tests/diagnostics.test.mjs tests/pcm.test.mjs tests/native-diagnostics.test.mjs",
+    "test": "node --test tests/*.test.mjs && playwright test",
+    "test:unit": "node --test tests/*.test.mjs",
     "test:browser": "playwright test",
     "android:debug": "pnpm build && node android/build.mjs debug",
     "android:test": "node android/build.mjs test",

@@ -24,6 +24,14 @@ export const isZipFile = async (file: File) => {
 
 const viewOf = (bytes: Uint8Array) => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 
+const pushInflate = (inflater: Inflate, bytes: Uint8Array, last: boolean) => {
+  try {
+    inflater.push(bytes, last)
+  } catch {
+    invalid()
+  }
+}
+
 const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
   let crc = value
   for (let bit = 0; bit < 8; bit++) {
@@ -85,7 +93,11 @@ type Entry = {
   offset: number
 }
 
-const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: number }> => {
+const readDirectory = async (
+  file: File,
+  signal?: AbortSignal
+): Promise<{ entries: Entry[]; offset: number }> => {
+  signal?.throwIfAborted()
   if (file.size < 22) {
     invalid()
   }
@@ -120,11 +132,22 @@ const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: nu
   const entries: Entry[] = []
   const paths = new Set<string>()
   let cursor = 0
+  let block: Uint8Array = new Uint8Array()
+  let blockStart = 0
+  const refill = async (start: number) => {
+    block = await readBytes(file, offset + start, Math.min(READ_CHUNK_BYTES, size - start))
+    signal?.throwIfAborted()
+    blockStart = start
+  }
   for (let index = 0; index < count; index++) {
     if (cursor + 46 > size) {
       invalid()
     }
-    const view = viewOf(await readBytes(file, offset + cursor, 46))
+    if (cursor + 46 > blockStart + block.length) {
+      await refill(cursor)
+    }
+    const relative = cursor - blockStart
+    const view = viewOf(block.subarray(relative, relative + 46))
     if (view.getUint32(0, true) !== 0x02014b50) {
       invalid()
     }
@@ -150,7 +173,12 @@ const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: nu
     ) {
       invalid()
     }
-    const name = await readBytes(file, offset + cursor + 46, nameLength)
+    if (cursor + 46 + nameLength + extraLength > blockStart + block.length) {
+      // A header can cross a block boundary. Refill from this entry, never from the whole directory.
+      await refill(cursor)
+    }
+    const nameStart = cursor - blockStart + 46
+    const name = block.slice(nameStart, nameStart + nameLength)
     const path = decodePath(name, flags)
     // 目录和同名文件也不能互相覆盖。
     const identity = path.endsWith('/') ? path.slice(0, -1) : path
@@ -158,7 +186,7 @@ const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: nu
       invalid()
     }
     paths.add(identity)
-    checkExtra(await readBytes(file, offset + cursor + 46 + nameLength, extraLength))
+    checkExtra(block.subarray(nameStart + nameLength, nameStart + nameLength + extraLength))
     entries.push({
       path,
       name,
@@ -238,11 +266,16 @@ export type ArchiveEntry = {
  * 按条目在文件中的物理顺序逐条、逐块解压，跳过目录条目。
  * 调用方必须消费完当前条目的数据，再请求下一个条目。
  */
-export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
-  const directory = await readDirectory(file)
+const readArchive = async function* (
+  file: File,
+  directory: Awaited<ReturnType<typeof readDirectory>>,
+  signal?: AbortSignal
+): AsyncGenerator<ArchiveEntry> {
   for (const [index, entry] of directory.entries.entries()) {
+    signal?.throwIfAborted()
     const boundary = directory.entries[index + 1]?.offset ?? directory.offset
     const start = await readEntryOffset(file, entry, boundary)
+    signal?.throwIfAborted()
     if (entry.path.endsWith('/')) {
       continue
     }
@@ -256,8 +289,8 @@ export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
         if (written > entry.size) {
           invalid()
         }
-        for (const byte of chunk) {
-          crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 0xff]
+        for (let i = 0; i < chunk.length; i++) {
+          crc = (crc >>> 8) ^ crcTable[(crc ^ chunk[i]) & 0xff]
         }
         if (chunk.length) {
           pending.push(chunk)
@@ -270,6 +303,7 @@ export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
           start + offset,
           Math.min(READ_CHUNK_BYTES, entry.compressedSize - offset)
         )
+        signal?.throwIfAborted()
         if (!inflate) {
           append(chunk)
           yield* pending.splice(0)
@@ -277,13 +311,14 @@ export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
         }
         for (let cursor = 0; cursor < chunk.length; cursor += INFLATE_CHUNK_BYTES) {
           const end = Math.min(cursor + INFLATE_CHUNK_BYTES, chunk.length)
-          inflate.push(chunk.subarray(cursor, end), offset + end === entry.compressedSize)
+          signal?.throwIfAborted()
+          pushInflate(inflate, chunk.subarray(cursor, end), offset + end === entry.compressedSize)
           // yield 暂停解压，等待调用方完成异步写入；不缓存整个条目。
           yield* pending.splice(0)
         }
       }
       if (inflate && entry.compressedSize === 0) {
-        inflate.push(new Uint8Array(), true)
+        pushInflate(inflate, new Uint8Array(), true)
         yield* pending.splice(0)
       }
       if (written !== entry.size || (crc ^ 0xffffffff) >>> 0 !== entry.crc) {
@@ -295,6 +330,15 @@ export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
     if (!completed) {
       invalid()
     }
+  }
+}
+
+/** Keep the validated directory and its iterator bound to this particular read-only File. */
+export const openArchive = async (file: File, signal?: AbortSignal) => {
+  const directory = await readDirectory(file, signal)
+  return {
+    total: directory.entries.reduce((count, entry) => count + Number(!entry.path.endsWith('/')), 0),
+    entries: readArchive(file, directory, signal),
   }
 }
 
