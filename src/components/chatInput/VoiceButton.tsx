@@ -31,9 +31,11 @@ export const VoiceButton = ({
     ? t('voiceInputRequiresHttps')
     : recording
       ? t('voiceInputStop')
-      : status === 'transcribing'
-        ? t('voiceInputCancel')
-        : t('voiceInput')
+      : status === 'preparing'
+        ? t('voiceInputPreparing')
+        : status === 'transcribing'
+          ? t('voiceInputCancel')
+          : t('voiceInput')
 
   return (
     <>
@@ -66,7 +68,7 @@ export const VoiceButton = ({
                 <IconMicFill16 />
               </span>
             </span>
-          ) : status === 'transcribing' ? (
+          ) : status === 'transcribing' || status === 'preparing' ? (
             <span className={styles.loading} />
           ) : (
             <IconMicOutline16 />

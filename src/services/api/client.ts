@@ -1,6 +1,7 @@
 import { translate, type TranslationMessage } from '../../i18n/index.js'
 import { readMessageEvent } from './parseEvent.js'
 import { readServerSentEvents } from './sse.js'
+import { diagnostic, diagnosticError } from '../diagnostics.js'
 import type {
   ApiErrorBody,
   CreateMessageRequest,
@@ -66,17 +67,36 @@ const readErrorResponse = async (
   return new ApiError(kind, message, response.status)
 }
 
+const endpoint = (url: string) => {
+  try {
+    const path = new URL(url).pathname
+    if (path === '/models') { return 'models' }
+    if (path === '/anthropic/v1/messages') { return 'messages' }
+    if (path.startsWith('/anthropic/v1/files')) { return 'files' }
+    if (path === '/v1/tools/asr') { return 'asr' }
+    if (path === '/v1/tools/tts') { return 'tts' }
+  } catch { /* A malformed URL is not recorded. */ }
+  return 'unknown'
+}
+
 export const request = async (url: string, init: RequestInit): Promise<Response> => {
+  const api = endpoint(url)
+  const started = performance.now()
+  diagnostic('api.start', { api, method: init.method ?? 'GET' })
   let response: Response
   try {
     response = await fetch(url, init)
   } catch (error) {
     if (init.signal?.aborted) {
+      diagnostic('api.cancel', { api, elapsedMs: Math.round(performance.now() - started) })
       throw error
     }
+    diagnosticError('api.error', error, { api, elapsedMs: Math.round(performance.now() - started), apiKind: 'network' })
     throw new ApiError('network', error instanceof Error ? error.message : String(error))
   }
+  diagnostic('api.response', { api, status: response.status, elapsedMs: Math.round(performance.now() - started) })
   if (!response.ok) {
+    diagnostic('api.error', { api, status: response.status, apiKind: 'http' })
     throw await readErrorResponse(response)
   }
   return response

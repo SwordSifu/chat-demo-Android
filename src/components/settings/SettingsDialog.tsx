@@ -1,5 +1,7 @@
 import clsx from 'clsx'
-import { useRef, useState, type ReactNode } from 'react'
+import { isSaveCancelled, saveBlob } from '../../platform/android.js'
+import { useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { clearDiagnostics, diagnosticArchive, diagnosticsEnabled, setDiagnosticLogging, subscribeDiagnostics } from '../../services/diagnostics.js'
 import {
   IconDarkOutline16,
   IconDataOutline16,
@@ -22,6 +24,7 @@ import {
   isChineseBrowser,
   setLocale,
   setLocation,
+  setSafetyCheck,
   setThemePreference,
   setTtsVoice,
   useSettings,
@@ -98,6 +101,7 @@ const SettingsContent = () => {
             <>
               <ThemeSetting />
               <LocaleSetting />
+              <SafetyCheckSetting />
               <TtsVoiceSetting />
               <LocationSetting />
             </>
@@ -106,6 +110,7 @@ const SettingsContent = () => {
               <ApiKeyField editor={apiKeyEditor} />
               <ImportHistory historyImport={historyImport} disabled={historyBusy} />
               <ExportHistory disabled={historyBusy} />
+              <DiagnosticsSettings disabled={historyBusy} />
               <SettingCell
                 label={t('deleteAllSessions')}
                 status={null}
@@ -203,6 +208,72 @@ const useHistoryDelete = () => {
     },
     confirm,
   }
+}
+
+const DiagnosticsSettings = ({ disabled }: { disabled: boolean }) => {
+  const t = useTranslate()
+  const enabled = useSyncExternalStore(subscribeDiagnostics, diagnosticsEnabled)
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState<Status>(null)
+  const run = async (action: 'toggle' | 'export' | 'clear') => {
+    if (busy) { return }
+    setBusy(true)
+    setStatus(null)
+    try {
+      if (action === 'toggle') {
+        await setDiagnosticLogging(!enabled)
+      } else if (action === 'clear') {
+        await clearDiagnostics()
+        setStatus({ key: 'diagnosticsCleared' })
+      } else {
+        const { blob, name } = await diagnosticArchive()
+        await saveBlob(blob, name)
+        setStatus({ key: 'diagnosticsExported' })
+      }
+    } catch (error) {
+      if (!isSaveCancelled(error)) { setStatus({ key: 'diagnosticsFailed', error: true }) }
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <>
+    <SettingCell label={t('diagnosticsLogging')} description={t('diagnosticsDescription')} status={null}
+      action={<button type="button" role="switch" aria-checked={enabled}
+        aria-label={t('diagnosticsLogging')} className={styles.safetySwitch} disabled={disabled || busy}
+        onClick={() => void run('toggle')}><span className={styles.safetySwitchThumb} aria-hidden="true" /></button>} />
+    <SettingCell label={t('diagnosticsTitle')} status={status}
+      action={<div className={styles.diagnosticsActions}>
+        <Button variant="outlined" size="m" disabled={disabled || busy} onClick={() => void run('export')}>{t('diagnosticsExport')}</Button>
+        <Button variant="outlined" size="m" disabled={disabled || busy} onClick={() => void run('clear')}>{t('diagnosticsClear')}</Button>
+      </div>} />
+  </>
+}
+
+const SafetyCheckSetting = () => {
+  const t = useTranslate()
+  const enabled = useSettings((state) => state.safetyCheck)
+  const descriptionId = useId()
+  return (
+    <SettingCell
+      label={t('settingsSafetyCheck')}
+      description={t('settingsSafetyCheckDescription')}
+      descriptionId={descriptionId}
+      status={null}
+      action={
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label={t('settingsSafetyCheck')}
+          aria-describedby={descriptionId}
+          className={styles.safetySwitch}
+          onClick={() => setSafetyCheck(!enabled)}
+        >
+          <span className={styles.safetySwitchThumb} aria-hidden="true" />
+        </button>
+      }
+    />
+  )
 }
 
 const LocationSetting = () => {
@@ -408,12 +479,14 @@ const errorStatus = (key: TranslationKey, error: unknown): Status => ({
 const SettingCell = ({
   label,
   description,
+  descriptionId,
   status,
   action,
   className,
 }: {
   label: string
   description?: string
+  descriptionId?: string
   status: Status
   action: ReactNode
   className?: string
@@ -424,7 +497,7 @@ const SettingCell = ({
       <div className={styles.text}>
         <div className={styles.label}>{label}</div>
         {status || description ? (
-          <div className={clsx(styles.description, status?.error && styles.error)}>
+          <div id={descriptionId} className={clsx(styles.description, status?.error && styles.error)}>
             {status
               ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
               : description}
@@ -524,14 +597,11 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
     setStatus(null)
     try {
       const { name, blob } = await exportHistory()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = name
-      link.click()
-      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      await saveBlob(blob, name)
     } catch (error) {
-      setStatus(errorStatus('historyExportFailed', error))
+      if (!isSaveCancelled(error)) {
+        setStatus(errorStatus('historyExportFailed', error))
+      }
     } finally {
       setBusy(false)
     }

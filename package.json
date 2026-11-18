@@ -7,7 +7,12 @@
   "type": "module",
   "scripts": {
     "dev": "rspack serve -c rspack.config.ts",
-    "build": "rm -rf dist && NODE_ENV=production rspack build -c rspack.config.ts",
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/unit.test.mjs tests/diagnostics.test.mjs tests/pcm.test.mjs tests/native-diagnostics.test.mjs && playwright test",
+    "test:unit": "node --test tests/unit.test.mjs tests/diagnostics.test.mjs tests/pcm.test.mjs tests/native-diagnostics.test.mjs",
+    "test:browser": "playwright test",
+    "android:debug": "pnpm build && node android/build.mjs debug",
+    "android:test": "node android/build.mjs test",
     "type": "tsc -p tsconfig.json",
     "lint": "oxlint src rspack.config.ts",
     "format": "oxfmt --write ."
@@ -35,6 +40,7 @@
     "zustand": "4.4.7"
   },
   "devDependencies": {
+    "@playwright/test": "1.56.1",
     "@rspack/cli": "2.0.2",
     "@rspack/core": "2.0.2",
     "@rspack/dev-server": "2.0.1",

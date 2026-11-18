@@ -138,7 +138,7 @@ export const applyEvent = (
 
 /**
  * 回复结束：未结束的思考块以当前时间收尾。
- * 安全拒绝（stop_reason: refusal）时已下发的思考与正文不能撤回，按协议要求由客户端丢弃，只保留工具块。
+ * 即使不传 safety_check，联网工具仍可能返回 refusal；按协议清理该响应的思考与正文，只保留工具块。
  */
 export const settleReply = (
   reply: AssistantMessage,

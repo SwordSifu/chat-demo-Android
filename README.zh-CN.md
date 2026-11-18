@@ -2,17 +2,21 @@
 
 [English](README.md) | 简体中文
 
+> **安卓分支（非官方）**：轻量原生 Java + 系统 WebView，内置本地网页，仅接 DeepSeek 官方 API。
+> 支持 Android 8.0+，需系统 WebView 105+（建议保持最新版）。安装、构建、测试范围及资源取舍见 [安卓说明](ANDROID.md)。
+> [安卓预发布 APK](https://github.com/SwordSifu/chat-demo-Android/releases) 供侧载测试。`pnpm android:debug` 生成本地调试 APK；商店分发前需配置正式签名并完成真机验收。
+
 基于 DeepSeek API 的静态聊天示例。无需应用后端，浏览器直接请求配置的 API 服务。
 
 点击 [在线体验](https://deepseek-ai.github.io/chat-demo/) 即可使用，也可以前往 [Releases](https://github.com/deepseek-ai/deepseek-chat-demo/releases) 下载压缩包，解压后双击 `index.html` 在本地使用，无需安装或构建。首次使用时，请在设置中填写 API Key。
 
 ## 运行
 
-准备 Node.js 22.12+ 和 pnpm：
+准备 Node.js 24+ 和 pnpm（构建脚本使用原生 TypeScript 类型擦除）：
 
 ```sh
-git clone https://github.com/deepseek-ai/chat-demo.git
-cd chat-demo
+git clone --branch android-lite https://github.com/SwordSifu/chat-demo-Android.git
+cd chat-demo-Android
 pnpm install
 pnpm dev
 ```
@@ -37,7 +41,7 @@ pnpm build
 
 ## 数据
 
-API Key 和设置保存在浏览器 localStorage，会话及附件原件保存在 IndexedDB，本地数据按浏览器用户配置和站点源（origin）隔离。发送对话、上传附件和使用语音功能时，相应内容会提交给配置的 API 服务。
+安卓 App 的 API Key 使用 Android Keystore 支持的 AES-GCM 加密存储，初始化或保存失败不会回退明文；普通网页版仍使用 localStorage 保存 Key。其余设置保存在 localStorage，会话及附件原件保存在 IndexedDB，本地数据按浏览器用户配置和站点源（origin）隔离。发送对话、上传附件和使用语音功能时，相应内容会提交给配置的 API 服务。
 
 设置中的历史导入导出使用 ZIP 格式。导入会在确认并校验成功后替换全部本地会话和附件；导出包含会话与本地可用的图片原件，不包含 API Key、设置或非图片附件原件。格式与保留范围见[历史导入导出](src/services/chat/history/README.md)。
 
@@ -53,7 +57,7 @@ API Key 和设置保存在浏览器 localStorage，会话及附件原件保存�
 | `pnpm lint`   | oxlint 检查         |
 | `pnpm format` | oxfmt 格式化        |
 
-[rspack.config.ts](rspack.config.ts) 默认连接 `https://api.deepseek.com`。`createConfig({ apiOrigin, devServer })` 支持自定义 API 地址和开发服务器代理。
+[rspack.config.ts](rspack.config.ts) 连接 `https://api.deepseek.com`。本安卓分支仅支持官方服务，CSP 和原生网络策略不允许任意第三方 API；保留的构建配置工厂不代表支持多服务商。
 
 聊天默认使用 `deepseek-flash`，通过 Anthropic 兼容的 Messages / Files API 通信；语音使用 ASR / TTS 接口。请求使用搜索、链接阅读、标题和 `latest_reminder` 等扩展，接入服务需支持相应能力。附件实际支持的格式以服务端校验为准。
 

@@ -1,4 +1,5 @@
 import clsx from 'clsx'
+import { registerBackHandler } from '../../platform/back.js'
 import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslate } from '../../i18n/index.js'
@@ -36,6 +37,10 @@ export const Modal = ({
   useEffect(() => {
     const token = {}
     openModals.push(token)
+    const unregisterBack = registerBackHandler(() => {
+      onCloseRef.current()
+      return true
+    }, 10)
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && openModals.at(-1) === token) {
         onCloseRef.current()
@@ -43,6 +48,7 @@ export const Modal = ({
     }
     document.addEventListener('keydown', onKeyDown)
     return () => {
+      unregisterBack()
       openModals.splice(openModals.indexOf(token), 1)
       document.removeEventListener('keydown', onKeyDown)
     }

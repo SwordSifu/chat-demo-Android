@@ -1,4 +1,5 @@
 import { ApiError, API_ORIGIN, request } from './client.js'
+import { diagnostic } from '../diagnostics.js'
 
 /**
  * 语音接口：
@@ -19,6 +20,7 @@ export const transcribe = async (
   audio: Blob,
   signal?: AbortSignal
 ): Promise<string> => {
+  diagnostic('asr.start', { bytes: audio.size })
   const form = new FormData()
   form.append('file', audio, 'recording.wav')
   const response = await request(`${TOOLS_BASE_URL}/asr`, {
@@ -42,6 +44,7 @@ export const transcribe = async (
   ) {
     throw new ApiError('protocol', raw)
   }
+  diagnostic('asr.success') // Never record the recognized text or raw response.
   return body.text
 }
 

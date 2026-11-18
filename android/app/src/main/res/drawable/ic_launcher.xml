@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generic chat icon, not the official DeepSeek logo. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp"
+    android:viewportWidth="48" android:viewportHeight="48">
+    <path android:fillColor="#4D6BFE"
+        android:pathData="M10,0H38Q48,0 48,10V38Q48,48 38,48H10Q0,48 0,38V10Q0,0 10,0Z" />
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M12,11H36Q39,11 39,14V30Q39,33 36,33H23L14,39V33H12Q9,33 9,30V14Q9,11 12,11Z" />
+    <path android:fillColor="#4D6BFE"
+        android:pathData="M16,19H32V22H16ZM16,25H28V28H16Z" />
+</vector>

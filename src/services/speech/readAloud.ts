@@ -29,7 +29,7 @@ const finish = (controller: AbortController) => {
   if (current?.controller !== controller) {
     return
   }
-  void current.context.close()
+  void current.context.close().catch(() => {})
   current = null
   useReadAloud.setState({ messageId: null, status: 'idle' })
 }
@@ -88,7 +88,15 @@ export const toggleReadAloud = (
     return
   }
   const controller = new AbortController()
-  const context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE })
+  let context: AudioContext
+  let resumed: Promise<void>
+  try {
+    context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE })
+    resumed = context.resume()
+  } catch (error) {
+    onError(error)
+    return
+  }
   current = { controller, context }
   useReadAloud.setState({ messageId, status: 'loading' })
   // 音色在开始朗读时读取，设置中切换后下一次朗读生效
@@ -96,12 +104,20 @@ export const toggleReadAloud = (
 
   void (async () => {
     let nextTime = 0
-    let lastSource: AudioBufferSourceNode | null = null
+    let scheduled = false
+    let eof = false
     let rest = new Uint8Array(0)
+    const sources = new Set<AudioBufferSourceNode>()
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    const cancelReader = () => { void reader?.cancel().catch(() => {}) }
     try {
+      await resumed
+      if (controller.signal.aborted) {
+        return
+      }
       const stream = await synthesize(apiKey ?? '', text, ttsVoice, controller.signal)
-      const reader = stream.getReader()
-      controller.signal.addEventListener('abort', () => void reader.cancel().catch(() => {}))
+      reader = stream.getReader()
+      controller.signal.addEventListener('abort', cancelReader, { once: true })
       for (;;) {
         const { done, value } = await reader.read()
         if (done) {
@@ -115,23 +131,44 @@ export const toggleReadAloud = (
         if (samples.length === 0) {
           continue
         }
-        const buffer = context.createBuffer(1, samples.length, TTS_SAMPLE_RATE)
-        buffer.copyToChannel(samples, 0)
-        const source = context.createBufferSource()
-        source.buffer = buffer
-        source.connect(context.destination)
-        // 网络慢于播放时从当前时间续上，不补播过去的时间
-        nextTime = Math.max(nextTime, context.currentTime + (lastSource ? 0 : START_DELAY))
-        source.start(nextTime)
-        nextTime += buffer.duration
-        lastSource = source
-        if (useReadAloud.getState().status === 'loading') {
-          useReadAloud.setState({ status: 'playing' })
+        // Split large network frames and cap scheduled audio to about 3.5 seconds.
+        // Backpressure prevents fast downloads from retaining an entire long reply as AudioBuffers.
+        for (let offset = 0; offset < samples.length; offset += TTS_SAMPLE_RATE) {
+          while (nextTime - context.currentTime > 2.5) {
+            if (controller.signal.aborted) {
+              return
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, 50))
+          }
+          if (controller.signal.aborted) {
+            return
+          }
+          const frame = samples.subarray(offset, offset + TTS_SAMPLE_RATE)
+          const buffer = context.createBuffer(1, frame.length, TTS_SAMPLE_RATE)
+          buffer.copyToChannel(frame, 0)
+          const source = context.createBufferSource()
+          source.buffer = buffer
+          source.connect(context.destination)
+          sources.add(source)
+          // Install before playback; EOF can arrive after the last source has already ended.
+          source.onended = () => {
+            sources.delete(source)
+            source.disconnect()
+            if (eof && sources.size === 0) {
+              finish(controller)
+            }
+          }
+          nextTime = Math.max(nextTime, context.currentTime + (scheduled ? 0 : START_DELAY))
+          source.start(nextTime)
+          nextTime += buffer.duration
+          scheduled = true
+          if (useReadAloud.getState().status === 'loading') {
+            useReadAloud.setState({ status: 'playing' })
+          }
         }
       }
-      if (lastSource) {
-        lastSource.onended = () => finish(controller)
-      } else {
+      eof = true
+      if (sources.size === 0) {
         finish(controller)
       }
     } catch (error) {
@@ -139,6 +176,12 @@ export const toggleReadAloud = (
         finish(controller)
         onError(error)
       }
+    } finally {
+      controller.signal.removeEventListener('abort', cancelReader)
+      if (!eof) {
+        await reader?.cancel().catch(() => {})
+      }
+      reader?.releaseLock()
     }
   })()
 }

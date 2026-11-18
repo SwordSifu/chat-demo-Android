@@ -1,0 +1,62 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'net.deepseek.chat'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'io.github.swordsifu.dsapichat'
+        minSdk 26
+        targetSdk 35
+        versionCode 6
+        versionName '1.0.5'
+    }
+    buildTypes {
+        debug { debuggable true }
+        release {
+            debuggable false
+            minifyEnabled false
+            // Opt-in compatibility build for existing sideload users; not a store signing config.
+            if (providers.gradleProperty('signCompatiblePreview').orNull == 'true') {
+                signingConfig signingConfigs.debug
+            }
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    buildFeatures { buildConfig true }
+    sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/webAssets')
+}
+
+def webDist = rootProject.layout.projectDirectory.dir('../dist')
+def verifyWebAssets = tasks.register('verifyWebAssets') {
+    doLast {
+        if (!webDist.file('index.html').asFile.isFile()) {
+            throw new GradleException('Missing ../dist/index.html. Build the frontend from the project root before building the APK.')
+        }
+        // WebView 105+ supports WOFF2. Only omit legacy font fallbacks when every
+        // bundled face selects WOFF2 first; fail safely if an upstream CSS change breaks this.
+        fileTree(webDist).matching { include '**/*.css' }.each { css ->
+            (css.getText('UTF-8') =~ /(?s)@font-face\s*\{([^}]+)\}/).each { face ->
+                def source = (face[1] =~ /src\s*:\s*url\(["']?([^)'"\s]+)/)
+                if (!source.find() || !(source.group(1) ==~ /.*\.woff2([?#].*)?/)) {
+                    throw new GradleException("WOFF2 must be the first font source before excluding legacy fonts: ${css.name}")
+                }
+            }
+        }
+    }
+}
+def syncWebAssets = tasks.register('syncWebAssets', Sync) {
+    dependsOn(verifyWebAssets)
+    from(webDist)
+    exclude 'static/media/*.ttf', 'static/media/*.woff'
+    into(layout.buildDirectory.dir('generated/webAssets'))
+}
+tasks.named('preBuild').configure { dependsOn(syncWebAssets) }
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.12.1'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20250107'
+}

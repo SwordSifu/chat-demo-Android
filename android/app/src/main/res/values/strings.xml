@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DS API Chat</string>
+    <string name="webview_required">Android System WebView 105 or newer is required. Update Android System WebView / Chrome, then reopen DS API Chat.</string>
+</resources>

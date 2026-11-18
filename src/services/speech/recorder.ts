@@ -1,132 +1,165 @@
-/**
- * 录音并编码为 ASR 接受的 WAV（单声道、16-bit PCM、16kHz）。
- *
- * AudioContext 以 16kHz 创建，浏览器负责重采样；ScriptProcessorNode 采集 PCM 样本。
- * 录音处理在页面内完成。
- */
-export const SAMPLE_RATE = 16000
-/** ASR 单次时长上限 120 秒 */
-export const MAX_SECONDS = 120
+import { diagnostic, diagnosticError } from '../diagnostics.js'
+import { encodePcmWav, PcmResampler } from './pcm.js'
 
+export const SAMPLE_RATE = 16000
+export const MAX_SECONDS = 120
 const BUFFER_SIZE = 4096
 
 export type Recording = {
-  /** 停止录音并返回 WAV；没有采到声音时返回 null */
   stop: () => Promise<Blob | null>
-  /** 放弃录音，释放麦克风 */
   cancel: () => void
-  /** 频谱分析节点，只读；采样率与录音一致 */
   analyser: AnalyserNode
 }
 
-/** 开始录音；到达时长上限时调用 onLimit，由调用方决定何时 stop */
-export const startRecording = async (onLimit: () => void): Promise<Recording> => {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-  })
+type Options = { signal?: AbortSignal; onStall?: () => void }
+const abortError = () => new DOMException('Recording cancelled', 'AbortError')
+
+/** Start with the device's native rate under the user gesture, then downsample PCM to 16 kHz. */
+export const startRecording = async (onLimit: () => void, { signal, onStall }: Options = {}): Promise<Recording> => {
+  if (signal?.aborted) { throw abortError() }
+  if (typeof AudioContext !== 'function' || !navigator.mediaDevices?.getUserMedia) {
+    throw new DOMException('Audio capture unavailable', 'NotSupportedError')
+  }
   let context: AudioContext | undefined
+  let stream: MediaStream | undefined
   let source: MediaStreamAudioSourceNode | undefined
   let processor: ScriptProcessorNode | undefined
   let analyser: AnalyserNode | undefined
+  let stallTimer: ReturnType<typeof setTimeout> | undefined
+  let limitTimer: ReturnType<typeof setTimeout> | undefined
+  let resumeTimer: ReturnType<typeof setTimeout> | undefined
   let released = false
+  let limited = false
+  let frames = 0
+  let length = 0
+  let startedAt = 0
+  let phase: 'permission' | 'context' = 'context'
+  const chunks: Float32Array[] = []
+  let rejectAbort: ((reason: unknown) => void) | undefined
+  const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject })
+  // Every branch consumes this promise; this extra handler also covers abort between await points.
+  void aborted.catch(() => {})
 
   const release = () => {
-    if (released) {
-      return
-    }
+    if (released) { return }
     released = true
-    if (processor) {
-      processor.onaudioprocess = null
-    }
-    // 初始化可能只完成了一部分；单个节点断开失败也不能阻止麦克风释放。
+    clearTimeout(stallTimer)
+    clearTimeout(limitTimer)
+    clearTimeout(resumeTimer)
+    signal?.removeEventListener('abort', onAbort)
+    if (processor) { processor.onaudioprocess = null }
     for (const node of [processor, analyser, source]) {
-      try {
-        node?.disconnect()
-      } catch {
-        // 继续释放其余资源。
-      }
+      try { node?.disconnect() } catch { /* Continue releasing the microphone. */ }
     }
-    for (const track of stream.getTracks()) {
-      track.stop()
+    for (const track of stream?.getTracks() ?? []) { track.stop() }
+    if (context) {
+      context.onstatechange = null
+      void context.close().catch((error) => diagnosticError('audio.context.error', error))
     }
-    void context?.close().catch(() => {})
   }
+  const onAbort = () => {
+    release()
+    chunks.length = 0
+    rejectAbort?.(abortError())
+  }
+  const reachLimit = () => {
+    if (limited || released) { return }
+    limited = true
+    diagnostic('audio.capture.limit', { samples: length, frames })
+    onLimit()
+  }
+  signal?.addEventListener('abort', onAbort, { once: true })
 
   try {
-    context = new AudioContext({ sampleRate: SAMPLE_RATE })
+    // Creating/resuming after awaiting permission can lose activation; forcing 16 kHz also
+    // stalls some WebView/audio backends. Keep the native context rate and convert ourselves.
+    context = new AudioContext()
+    const resume = context.resume()
+    void resume.catch(() => {})
+    phase = 'permission'
+    diagnostic('audio.permission.request')
+    const media = navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    })
+    // getUserMedia has no AbortSignal. Stop a late stream even if permission resolves after cancellation.
+    void media.then((late) => {
+      if (released || signal?.aborted) {
+        for (const track of late.getTracks()) { track.stop() }
+      }
+    }, () => {})
+    stream = await Promise.race([media, aborted])
+    if (released || signal?.aborted) { throw abortError() }
+    phase = 'context'
+    diagnostic('audio.permission.granted', { granted: true })
+    const timeout = new Promise<never>((_resolve, reject) => {
+      resumeTimer = setTimeout(() => reject(new DOMException('Audio context did not resume', 'TimeoutError')), 5000)
+    })
+    await Promise.race([resume, aborted, timeout])
+    clearTimeout(resumeTimer)
+    if (released || signal?.aborted) { throw abortError() }
+    const resampler = new PcmResampler(context.sampleRate, SAMPLE_RATE)
     source = context.createMediaStreamSource(stream)
     processor = context.createScriptProcessor(BUFFER_SIZE, 1, 1)
-    // 频谱分析用：串在录音链路中间（原样透传），WebKit 不会处理未连到输出的分析节点
     analyser = context.createAnalyser()
     analyser.fftSize = 512
     analyser.smoothingTimeConstant = 0.2
-    const chunks: Float32Array[] = []
-    let length = 0
-    let limited = false
+    diagnostic('audio.context.ready', { inputRate: context.sampleRate, outputRate: SAMPLE_RATE, contextState: context.state })
+    context.onstatechange = () => {
+      diagnostic('audio.context.state', { contextState: context?.state })
+    }
     processor.onaudioprocess = (event) => {
-      if (limited) {
-        return
+      if (limited || released) { return }
+      frames++
+      const pcm = resampler.process(event.inputBuffer.getChannelData(0))
+      const remaining = MAX_SECONDS * SAMPLE_RATE - length
+      const chunk = pcm.length > remaining ? pcm.slice(0, remaining) : pcm
+      if (chunk.length > 0) {
+        chunks.push(chunk)
+        length += chunk.length
       }
-      chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)))
-      length += BUFFER_SIZE
-      if (length >= MAX_SECONDS * SAMPLE_RATE) {
-        limited = true
-        onLimit()
-      }
+      if (length >= MAX_SECONDS * SAMPLE_RATE) { reachLimit() }
     }
     source.connect(analyser)
     analyser.connect(processor)
-    // ScriptProcessorNode 只有连到输出才会持续回调；输出缓冲保持静音
+    // The output is silent, but a destination connection is necessary to keep callbacks running.
     processor.connect(context.destination)
-    // 在 await getUserMedia 之后创建，iOS 上可能处于 suspended
-    if (context.state === 'suspended') {
-      void context.resume().catch(() => {})
-    }
-
+    startedAt = performance.now()
+    diagnostic('audio.capture.start', { inputRate: context.sampleRate, outputRate: SAMPLE_RATE })
+    stallTimer = setTimeout(() => {
+      if (!released && length === 0) {
+        diagnostic('audio.capture.stall', { frames, samples: length, contextState: context?.state, reason: 'stalled' })
+        release()
+        onStall?.()
+      }
+    }, 5000)
+    // Bound wall time too: a suspended audio clock must not record indefinitely.
+    limitTimer = setTimeout(reachLimit, MAX_SECONDS * 1000)
     return {
       stop: async () => {
         release()
-        return length === 0 ? null : encodeWav(chunks, length)
+        diagnostic(length === 0 ? 'audio.capture.empty' : 'audio.capture.stop', {
+          frames, samples: length, durationMs: Math.round(performance.now() - startedAt),
+          inputRate: context?.sampleRate, outputRate: SAMPLE_RATE,
+        })
+        const audio = length === 0 ? null : encodePcmWav(chunks, length, SAMPLE_RATE)
+        chunks.length = 0 // Do not retain Float32 PCM while the WAV is being uploaded.
+        return audio
       },
-      cancel: release,
+      cancel: () => {
+        if (!released) {
+          diagnostic('audio.capture.cancel', { frames, samples: length })
+          release()
+          chunks.length = 0
+        }
+      },
       analyser,
     }
   } catch (error) {
+    if (!signal?.aborted) {
+      diagnosticError(phase === 'permission' ? 'audio.permission.error' : 'audio.context.error', error)
+    }
     release()
+    chunks.length = 0
     throw error
   }
-}
-
-const encodeWav = (chunks: Float32Array[], length: number) => {
-  const samples = Math.min(length, MAX_SECONDS * SAMPLE_RATE)
-  const buffer = new ArrayBuffer(44 + samples * 2)
-  const view = new DataView(buffer)
-  const writeString = (offset: number, text: string) => {
-    for (let i = 0; i < text.length; i++) {
-      view.setUint8(offset + i, text.charCodeAt(i))
-    }
-  }
-  writeString(0, 'RIFF')
-  view.setUint32(4, 36 + samples * 2, true)
-  writeString(8, 'WAVE')
-  writeString(12, 'fmt ')
-  view.setUint32(16, 16, true)
-  view.setUint16(20, 1, true) // PCM
-  view.setUint16(22, 1, true) // 单声道
-  view.setUint32(24, SAMPLE_RATE, true)
-  view.setUint32(28, SAMPLE_RATE * 2, true)
-  view.setUint16(32, 2, true)
-  view.setUint16(34, 16, true)
-  writeString(36, 'data')
-  view.setUint32(40, samples * 2, true)
-  let offset = 44
-  let written = 0
-  for (const chunk of chunks) {
-    for (let i = 0; i < chunk.length && written < samples; i++, written++) {
-      const sample = Math.max(-1, Math.min(1, chunk[i]))
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
-      offset += 2
-    }
-  }
-  return new Blob([buffer], { type: 'audio/wav' })
 }

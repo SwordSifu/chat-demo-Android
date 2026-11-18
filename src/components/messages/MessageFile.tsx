@@ -1,4 +1,7 @@
 import clsx from 'clsx'
+import { isAndroid, isSaveCancelled, saveBlob } from '../../platform/android.js'
+import { Modal } from '../base/Modal.js'
+import { showToast } from '../base/toastState.js'
 import { useEffect, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { useUploads } from '../../services/attachments.js'
@@ -19,6 +22,10 @@ const useFileUrl = (id: string) => {
       if (!cancelled) {
         objectUrl = blob ? URL.createObjectURL(blob) : null
         setFileUrl({ id, url: objectUrl })
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setFileUrl({ id, url: null })
       }
     })
     return () => {
@@ -58,6 +65,27 @@ export const MessageFile = ({
   const t = useTranslate()
   const url = useFileUrl(file.id)
   const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const saveOriginal = async () => {
+    if (saving) {
+      return
+    }
+    setSaving(true)
+    try {
+      const blob = await loadFile(file.id)
+      if (!blob) {
+        throw new Error('Local attachment unavailable')
+      }
+      await saveBlob(blob, file.name)
+    } catch (error) {
+      if (!isSaveCancelled(error)) {
+        showToast(error instanceof Error ? error.message : String(error))
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
   const upload = useUploadState(file)
   const uploading = upload?.status === 'uploading'
   const failed = upload?.status === 'error'
@@ -135,6 +163,16 @@ export const MessageFile = ({
     }
 
     // 正常态：链接到原件
+    if (url && isAndroid()) {
+      return <>
+        <button type="button" className={clsx(styles.image, styles.imageThumb)}
+          title={file.name} onClick={() => setPreviewOpen(true)}>{preview}</button>
+        {previewOpen ? <Modal title={file.name} closable onClose={() => setPreviewOpen(false)}
+          footer={<button type="button" disabled={saving} onClick={() => void saveOriginal()}>{t('exportAllDownload')}</button>}>
+          <img src={url} alt={file.name} style={{ maxWidth: '100%', maxHeight: '65vh', objectFit: 'contain' }} />
+        </Modal> : null}
+      </>
+    }
     return url ? (
       <a
         className={clsx(styles.image, styles.imageThumb)}
@@ -158,7 +196,9 @@ export const MessageFile = ({
       status={uploading ? 'uploading' : failed ? 'error' : 'done'}
       error={errorText}
       onRetry={retry ?? undefined}
-      onOpen={url && !upload ? () => window.open(url, '_blank', 'noreferrer') : undefined}
+      onOpen={url && !upload && !saving
+        ? isAndroid() ? () => void saveOriginal() : () => window.open(url, '_blank', 'noreferrer')
+        : undefined}
     />
   )
 }

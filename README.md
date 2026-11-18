@@ -2,17 +2,21 @@
 
 English | [简体中文](README.zh-CN.md)
 
+> **Unofficial Android fork:** a small Java/system-WebView container with local assets and the official DeepSeek API only.
+> Android 8.0+ with WebView 105+ (keep it updated). See [Android build, privacy and verification notes](ANDROID.md).
+> [Android pre-release APKs](https://github.com/SwordSifu/chat-demo-Android/releases) are for sideload testing. `pnpm android:debug` builds a local debug APK. Store distribution requires device verification and a production signing key.
+
 A static chat demo powered by the DeepSeek API. No application backend is required: the browser connects directly to the configured API service.
 
 You can [try the app online](https://deepseek-ai.github.io/chat-demo/) or download the archive from [Releases](https://github.com/deepseek-ai/deepseek-chat-demo/releases), extract it, and double-click `index.html` to use it locally without installation or a build. Enter your API key in Settings before your first chat.
 
 ## Getting started
 
-Install Node.js 22.12+ and pnpm, then run:
+Install Node.js 24+ and pnpm (the build entry uses native TypeScript type stripping), then run:
 
 ```sh
-git clone https://github.com/deepseek-ai/chat-demo.git
-cd chat-demo
+git clone --branch android-lite https://github.com/SwordSifu/chat-demo-Android.git
+cd chat-demo-Android
 pnpm install
 pnpm dev
 ```
@@ -37,7 +41,7 @@ The output is written to `dist/`. Deploy it to a static web server or open `dist
 
 ## Data and storage
 
-Your API key and settings are stored in the browser's localStorage. Conversations and original attachments are stored in IndexedDB. Local data is isolated by browser profile and site origin. Sending messages, uploading attachments, and using speech features sends the relevant content to the configured API service.
+In the Android app, your API key is encrypted using an Android Keystore-backed AES-GCM key, with no plaintext fallback on failure. The ordinary web build still stores its API key in localStorage. Other settings use localStorage. Conversations and original attachments are stored in IndexedDB. Local data is isolated by browser profile and site origin. Sending messages, uploading attachments, and using speech features sends the relevant content to the configured API service.
 
 History import and export in Settings use ZIP archives. After confirmation and successful validation, importing replaces all local conversations and attachments. Exports include conversations and locally available original images, but exclude API keys, settings, and original non-image attachments. See the [history import/export documentation (Chinese)](src/services/chat/history/README.md) for the archive format and preservation details.
 
@@ -53,7 +57,7 @@ Settings → Data → Delete all chats clears all local conversations, original 
 | `pnpm lint`   | Lint with oxlint             |
 | `pnpm format` | Format with oxfmt            |
 
-[rspack.config.ts](rspack.config.ts) uses `https://api.deepseek.com` by default. Use `createConfig({ apiOrigin, devServer })` to customize the API origin and development server proxy.
+[rspack.config.ts](rspack.config.ts) connects to `https://api.deepseek.com`. This Android fork supports the official service only: CSP and native networking reject arbitrary third-party API origins. The retained config factory does not imply multi-provider support.
 
 Chat uses `deepseek-flash` by default through Anthropic-compatible Messages / Files APIs. Speech features use ASR / TTS endpoints. Requests include extensions for search, link reading, titles, and `latest_reminder`, so the configured service must support the corresponding capabilities. Supported attachment formats are determined by server-side validation.
 

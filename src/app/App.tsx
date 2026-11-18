@@ -10,7 +10,9 @@ import {
   useChatStore,
 } from '../services/chat/store.js'
 import { SearchPanel } from '../components/search/SearchPanel.js'
-import { closeSearchPanel } from '../components/search/searchPanelState.js'
+import { closeSearchPanel, useSearchPanel } from '../components/search/searchPanelState.js'
+import { handleAndroidBack, registerBackHandler } from '../platform/back.js'
+import { isAndroid } from '../platform/android.js'
 import { SessionView } from '../components/session/SessionView.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
@@ -22,7 +24,7 @@ import { onUploadNotice } from '../services/attachments.js'
 import { Button } from '../components/base/Button.js'
 import { stopReadAloud } from '../services/speech/readAloud.js'
 import { CollapsedSider } from '../components/sider/CollapsedSider.js'
-import { closeMobileSider } from '../components/sider/mobileSiderState.js'
+import { closeMobileSider, useMobileSider } from '../components/sider/mobileSiderState.js'
 import { MobileSider, Sider } from '../components/sider/Sider.js'
 import styles from './App.module.css'
 
@@ -59,6 +61,39 @@ export const App = () => {
   // 文件数、存储空间达到上限时，附件上只显示「上传失败」，原因用 toast 说明
   useEffect(() => onUploadNotice(showToast), [])
   useEffect(bindChatPersistence, [])
+  useEffect(() => {
+    if (!isAndroid()) {
+      return
+    }
+    const unregister = registerBackHandler(() => {
+      if (useSearchPanel.getState().entry) {
+        closeSearchPanel()
+        return true
+      }
+      if (useMobileSider.getState().open) {
+        closeMobileSider()
+        return true
+      }
+      return false
+    })
+    window.__deepseekAndroidBack = handleAndroidBack
+    window.__deepseekAndroidBackground = () => window.dispatchEvent(new Event('android-background'))
+    const onBackground = () => stopReadAloud()
+    const onVisibility = () => {
+      if (document.hidden) {
+        onBackground()
+      }
+    }
+    window.addEventListener('android-background', onBackground)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      unregister()
+      delete window.__deepseekAndroidBack
+      delete window.__deepseekAndroidBackground
+      window.removeEventListener('android-background', onBackground)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
 
   // 搜索结果面板只属于当前会话
   useEffect(closeSearchPanel, [activeId])

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TranslationMessage } from '../../i18n/index.js'
 import { transcribe } from '../../services/api/speech.js'
+import { ApiError } from '../../services/api/client.js'
+import { diagnostic, diagnosticError } from '../../services/diagnostics.js'
+import { isAndroid } from '../../platform/android.js'
 import { startRecording, type Recording } from '../../services/speech/recorder.js'
 import { useSettings } from '../../services/settings.js'
 import { showToast } from '../base/toastState.js'
 
-export type VoiceInputStatus = 'idle' | 'recording' | 'transcribing'
+export type VoiceInputStatus = 'idle' | 'preparing' | 'recording' | 'transcribing'
 
 /**
  * 录音依赖 getUserMedia，只在安全上下文可用（HTTPS、localhost、file://）。
@@ -21,6 +24,23 @@ const describeRecordingError = (error: unknown): TranslationMessage => {
     if (error.name === 'NotFoundError') {
       return { key: 'voiceInputNoDevice' }
     }
+    if (error.name === 'NotReadableError') {
+      return { key: 'voiceInputDeviceBusy' }
+    }
+    if (error.name === 'NotSupportedError') {
+      return { key: 'voiceInputUnsupported' }
+    }
+  }
+  return { key: 'voiceInputCaptureFailed' }
+}
+
+const describeTranscriptionError = (error: unknown): TranslationMessage => {
+  if (error instanceof ApiError) {
+    if (error.status === 401) { return { key: 'apiKeyInvalidRetry' } }
+    if (error.status === 402) { return { key: 'insufficientBalance' } }
+    if (error.status === 429) { return { key: 'rateLimited' } }
+    if (error.kind === 'network') { return { key: 'commonNetworkErrorToast' } }
+    if (error.status) { return { key: 'voiceInputAsrHttpFailed', params: { status: error.status } } }
   }
   return { key: 'voiceInputFailed' }
 }
@@ -47,7 +67,8 @@ export const useVoiceInput = (onText: (text: string) => void) => {
     controllerRef.current = null
   }, [])
 
-  const cancel = useCallback(() => {
+  const cancel = useCallback((reason: 'user' | 'background' = 'user') => {
+    if (recordingRef.current || controllerRef.current) { diagnostic('voice.cancel', { reason }) }
     cancelOperation()
     setStatus('idle')
   }, [cancelOperation])
@@ -69,9 +90,14 @@ export const useVoiceInput = (onText: (text: string) => void) => {
       } finally {
         recording.cancel()
       }
-      if (operationRef.current !== operation || !audio) {
+      if (operationRef.current !== operation) {
         return
       }
+      if (!audio) {
+        showToast({ key: 'voiceInputNoAudio' })
+        return
+      }
+      diagnostic('voice.stop', { bytes: audio.size })
       controller = new AbortController()
       controllerRef.current = controller
       setStatus('transcribing')
@@ -84,9 +110,10 @@ export const useVoiceInput = (onText: (text: string) => void) => {
       } else {
         showToast({ key: 'voiceInputEmpty' })
       }
-    } catch {
+    } catch (error) {
+      if (!controller?.signal.aborted) { diagnosticError('voice.error', error) }
       if (operationRef.current === operation && !controller?.signal.aborted) {
-        showToast({ key: 'voiceInputFailed' })
+        showToast(describeTranscriptionError(error))
       }
     } finally {
       if (operationRef.current === operation) {
@@ -104,26 +131,40 @@ export const useVoiceInput = (onText: (text: string) => void) => {
       await finish()
       return
     }
-    if (status === 'transcribing') {
+    if (status === 'transcribing' || status === 'preparing') {
       cancel()
       return
     }
     const operation = ++operationRef.current
-    setStatus('recording')
+    const controller = new AbortController()
+    controllerRef.current = controller
+    setStatus('preparing')
+    diagnostic('voice.start')
     try {
       const recording = await startRecording(() => {
         if (operationRef.current === operation) {
           showToast({ key: 'voiceInputLimitReached' })
           void finish()
         }
+      }, {
+        signal: controller.signal,
+        onStall: () => {
+          if (operationRef.current === operation) {
+            showToast({ key: 'voiceInputCaptureFailed' })
+            cancel()
+          }
+        },
       })
       if (operationRef.current !== operation) {
         recording.cancel()
         return
       }
       recordingRef.current = recording
+      setStatus('recording')
     } catch (error) {
-      if (operationRef.current === operation) {
+      if (!controller.signal.aborted) { diagnosticError('voice.error', error) }
+      if (operationRef.current === operation && !controller.signal.aborted) {
+        controllerRef.current = null
         setStatus('idle')
         showToast(describeRecordingError(error))
       }
@@ -144,6 +185,24 @@ export const useVoiceInput = (onText: (text: string) => void) => {
   }, [status])
 
   useEffect(() => cancelOperation, [cancelOperation])
+  useEffect(() => {
+    const onBackground = () => {
+      cancel('background')
+    }
+    const onVisibility = () => {
+      // Android permission dialogs can hide/pause WebView without leaving the Activity.
+      // Native onStop is authoritative there; ordinary browser tabs still stop on hidden.
+      if (document.hidden && !isAndroid()) {
+        onBackground()
+      }
+    }
+    window.addEventListener('android-background', onBackground)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('android-background', onBackground)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [cancel])
 
   /** 当前录音的频谱分析节点，未录音时为 null */
   const getAnalyser = useCallback(() => recordingRef.current?.analyser ?? null, [])

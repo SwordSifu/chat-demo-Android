@@ -1,4 +1,5 @@
 import { translate } from '../../i18n/index.js'
+import { getSafeExternalUrl } from '../../utils/urls.js'
 import type {
   ServerToolKind,
   TextCitation,
@@ -79,11 +80,8 @@ export type ReplyView = {
 }
 
 export const getSiteName = (url: string) => {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '')
-  } catch {
-    return ''
-  }
+  const safeUrl = getSafeExternalUrl(url)
+  return safeUrl ? new URL(safeUrl).hostname.replace(/^www\./, '') : ''
 }
 
 const getStatus = (

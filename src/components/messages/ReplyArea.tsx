@@ -1,4 +1,5 @@
 import { useTranslate } from '../../i18n/index.js'
+import { getSafeExternalUrl } from '../../utils/urls.js'
 import clsx from 'clsx'
 import { memo, useEffect, useState, type ReactNode } from 'react'
 import {
@@ -276,24 +277,29 @@ const ToolRow = ({
   </div>
 )
 
-const PageLink = ({ page, failedTip }: { page: PageItem; failedTip?: string }) => (
-  <span
-    className={clsx(styles.page, page.status === 'failed' ? styles.pageFailed : styles.pageDone)}
-  >
-    {page.status === 'failed' ? (
-      <Tooltip content={failedTip}>
+const PageLink = ({ page, failedTip }: { page: PageItem; failedTip?: string }) => {
+  const href = getSafeExternalUrl(page.url)
+  return (
+    <span
+      className={clsx(styles.page, page.status === 'failed' ? styles.pageFailed : styles.pageDone)}
+    >
+      {page.status === 'failed' ? (
+        <Tooltip content={failedTip}>
+          <span className={styles.pageText}>{page.title}</span>
+        </Tooltip>
+      ) : href ? (
+        <a className={styles.pageText} href={href} target="_blank" rel="noopener noreferrer">
+          {page.title}
+        </a>
+      ) : (
         <span className={styles.pageText}>{page.title}</span>
-      </Tooltip>
-    ) : (
-      <a className={styles.pageText} href={page.url} target="_blank" rel="noreferrer">
-        {page.title}
-      </a>
-    )}
-    <span className={styles.pageIcon}>
-      <IconRightUpOutline14 />
+      )}
+      <span className={styles.pageIcon}>
+        <IconRightUpOutline14 />
+      </span>
     </span>
-  </span>
-)
+  )
+}
 
 /** 边想边搜打开的网页：「浏览 N 个页面」+ 最多 5 个页面 */
 const OpenRow = ({

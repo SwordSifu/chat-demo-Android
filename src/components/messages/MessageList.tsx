@@ -5,7 +5,7 @@ import {
   getVisibleMessages,
   type MessageVersions,
 } from '../../services/chat/branches.js'
-import { selectMessageVersion } from '../../services/chat/store.js'
+import { selectMessageVersion, useChatStore } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
 import { closeSearchPanel } from '../search/searchPanelState.js'
 import { AssistantMessage } from './AssistantMessage.js'
@@ -48,7 +48,10 @@ export const MessageList = ({
   const stickyRef = useRef(true)
   const scrollTopRef = useRef(0)
   const restoreScrollRef = useRef<{ messageId: string; top: number } | null>(null)
-  const messages = getVisibleMessages(session)
+  const streamingReplyId = useChatStore((state) =>
+    Object.hasOwn(state.streaming, session.id) ? state.streaming[session.id].replyId : undefined
+  )
+  const messages = useMemo(() => getVisibleMessages(session), [session])
   const [previousVersions, setPreviousVersions] = useState(() =>
     buildMessageVersions(session, new Map())
   )
@@ -165,7 +168,7 @@ export const MessageList = ({
                   sessionId={session.id}
                   message={message}
                   isLast={index === lastIndex}
-                  streaming={streaming && index === lastIndex}
+                  streaming={message.id === streamingReplyId}
                   busy={streaming}
                   versions={versions.get(message.id) ?? EMPTY_VERSIONS}
                   onSelectVersion={selectVersion}

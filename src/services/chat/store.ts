@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { isAndroid } from '../../platform/android.js'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
 import type { ChatModel, CreateMessageRequest } from '../api/types.js'
@@ -15,6 +16,7 @@ import {
   prepareDraftMessage,
 } from './drafts.js'
 import { createLatestReminder } from './latestReminder.js'
+import { clearLiveReply, liveRepliesSnapshot, publishLiveReply, withLiveReply } from './liveReply.js'
 import {
   applyEvent,
   canContinueReply,
@@ -37,9 +39,7 @@ const MODEL: ChatModel = 'deepseek-flash'
 /** 所有生成请求统一携带的助手身份说明 */
 const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
-const SESSION_CACHE_LIMIT = 5
-/** 安全审核固定开启，所有请求都走扩展模式 */
-const SAFETY_CHECK = { level: 'high' } as const
+const SESSION_CACHE_LIMIT = isAndroid() ? 2 : 5
 /** 服务端判定 file_id 失效后，重新补传并重发的最多次数（不含首次请求） */
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
@@ -72,7 +72,7 @@ type ChatState = {
   /** null 表示新对话（欢迎页） */
   activeId: string | null
   /** 正在生成回复的会话 */
-  streaming: Record<string, AbortController>
+  streaming: Record<string, { controller: AbortController; replyId: string }>
 }
 
 export const useChatStore = create<ChatState>(() => ({
@@ -99,7 +99,7 @@ const getSession = (id: string) => {
 
 const getStreamController = (id: string) => {
   const streams = get().streaming
-  return Object.hasOwn(streams, id) ? streams[id] : undefined
+  return Object.hasOwn(streams, id) ? streams[id].controller : undefined
 }
 
 const sameSummary = (a: SessionSummary, b: SessionSummary) =>
@@ -170,14 +170,7 @@ const updateSession = (id: string, update: (session: Session) => Session) =>
   })
 
 const updateReply = (sessionId: string, reply: AssistantMessage) =>
-  updateSession(sessionId, (session) => ({
-    ...session,
-    messages: session.messages.map((message) =>
-      message.id === reply.id
-        ? { ...reply, parentId: message.parentId, selectedChildId: message.selectedChildId }
-        : message
-    ),
-  }))
+  updateSession(sessionId, (session) => withLiveReply(session, reply))
 
 const persist = (sessionId: string) => {
   const session = getSession(sessionId)
@@ -188,8 +181,9 @@ const persist = (sessionId: string) => {
     }
     const epoch = historyEpoch
     const files = pendingFiles.get(sessionId)
+    const liveReply = liveRepliesSnapshot().get(sessionId)
     void db
-      .saveSession(session, files)
+      .saveSession(withLiveReply(session, liveReply), files)
       .then(() => {
         if (epoch !== historyEpoch || !getSession(sessionId)) {
           return
@@ -197,7 +191,7 @@ const persist = (sessionId: string) => {
         if (pendingFiles.get(sessionId) === files) {
           pendingFiles.delete(sessionId)
         }
-        if (getSession(sessionId) === session) {
+        if (getSession(sessionId) === session && liveRepliesSnapshot().get(sessionId) === liveReply) {
           unsavedSessions.delete(sessionId)
           set((state) => ({
             sessionSaveErrors: Object.fromEntries(
@@ -247,9 +241,11 @@ export const bindChatPersistence = () => {
   }
   document.addEventListener('visibilitychange', onVisibilityChange)
   window.addEventListener('pagehide', save)
+  window.addEventListener('android-background', save)
   return () => {
     document.removeEventListener('visibilitychange', onVisibilityChange)
     window.removeEventListener('pagehide', save)
+    window.removeEventListener('android-background', save)
   }
 }
 
@@ -395,7 +391,7 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
   }
   set({ importingHistory: true })
   try {
-    for (const controller of Object.values(get().streaming)) {
+    for (const { controller } of Object.values(get().streaming)) {
       controller.abort()
     }
     // 已开始的单条删除先同步到内存，避免本次替换失败后列表残留已被删除的记录。
@@ -844,7 +840,7 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
   }
 
   const pending = new Map<string, FileAttachment>()
-  for (const [user] of getContextRounds(request.history).toReversed()) {
+  for (const [user] of getContextRounds(request.history).reverse()) {
     for (const file of user.files) {
       if (!file.serverId && !serverIds.has(file.id) && !pending.has(file.id)) {
         pending.set(file.id, file)
@@ -964,13 +960,18 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   if (!getSession(sessionId)?.title) {
     titleRequests.add(controller)
   }
-  set((state) => ({ streaming: { ...state.streaming, [sessionId]: controller } }))
+  set((state) => ({
+    streaming: { ...state.streaming, [sessionId]: { controller, replyId: initial.id } },
+  }))
   let reply = initial
   let frame = 0
+  let androidTimer: ReturnType<typeof setTimeout> | undefined
   const flush = () => {
     cancelAnimationFrame(frame)
+    clearTimeout(androidTimer)
+    androidTimer = undefined
     frame = 0
-    updateReply(sessionId, reply)
+    publishLiveReply(sessionId, reply)
   }
   streamFlushes.set(sessionId, flush)
 
@@ -987,7 +988,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           ? prepared.prefix.latestReminder
           : createLatestReminder(useSettings.getState())
         reply = { ...reply, latestReminder }
-        updateReply(sessionId, reply)
+        publishLiveReply(sessionId, reply)
         persist(sessionId)
         const messages = toRequestMessages(
           prepared.history,
@@ -996,14 +997,17 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           initial.thinking ?? false,
           latestReminder
         )
+        // Read live settings after uploads and again on each retry, not a render/session snapshot.
+        // An HTTP body already sent to the server cannot be changed by toggling this preference.
+        const { apiKey, safetyCheck } = useSettings.getState()
         const events = streamMessage(
-          useSettings.getState().apiKey ?? '',
+          apiKey ?? '',
           {
             model: initial.model ?? MODEL,
             system: SYSTEM_PROMPT,
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
-            safety_check: SAFETY_CHECK,
+            ...(safetyCheck ? { safety_check: { level: 'high' as const } } : {}),
             tools: serverTools(initial.search ?? false),
             ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
           },
@@ -1025,7 +1029,10 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             titleRequests.delete(controller)
           }
           reply = applyEvent(reply, event, Date.now(), blockIndexes)
-          if (document.visibilityState === 'hidden') {
+          if (isAndroid()) {
+            // Avoid redrawing Markdown at token rate or at the device's 120 Hz refresh rate.
+            androidTimer ??= setTimeout(flush, document.hidden ? 250 : 50)
+          } else if (document.visibilityState === 'hidden') {
             flush()
           } else {
             frame ||= requestAnimationFrame(flush)
@@ -1083,7 +1090,9 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
     titleRequests.delete(controller)
     streamFlushes.delete(sessionId)
     cancelAnimationFrame(frame)
+    clearTimeout(androidTimer)
     updateReply(sessionId, reply)
+    clearLiveReply(sessionId)
     set((state) => ({
       streaming: Object.fromEntries(
         Object.entries(state.streaming).filter(([id]) => id !== sessionId)

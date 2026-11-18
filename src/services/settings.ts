@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { getNativeApiKey, isAndroid, saveNativeApiKey } from '../platform/android.js'
 import type { TtsVoice } from './api/speech.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
@@ -7,7 +8,7 @@ export type Locale = 'zh-CN' | 'en-US'
 /** 主题偏好；默认跟随系统 */
 export type ThemePreference = 'light' | 'dark' | 'system'
 
-/** 本机设置，存 localStorage：API Key、语言、主题、位置、朗读音色、深度思考与智能搜索开关、侧边栏收起状态 */
+/** Android API Key 存原生 Keystore 支持的加密存储；普通网页 Key 及其余偏好存 localStorage。 */
 type Settings = {
   apiKey: string | null
   locale: Locale
@@ -16,6 +17,8 @@ type Settings = {
   ttsVoice: TtsVoice
   thinking: boolean
   search: boolean
+  /** Optional high-level input/output moderation; false keeps the API default checks. */
+  safetyCheck: boolean
   siderCollapsed: boolean
 }
 
@@ -27,6 +30,7 @@ const KEYS = {
   ttsVoice: 'chat-demo:tts-voice',
   thinking: 'chat-demo:thinking',
   search: 'chat-demo:search',
+  safetyCheck: 'chat-demo:safety-check',
   siderCollapsed: 'chat-demo:sider-collapsed',
 } as const
 
@@ -88,13 +92,14 @@ const initialThemePreference = (): ThemePreference => {
 const initialTtsVoice = (): TtsVoice => (read(KEYS.ttsVoice) === 'tide' ? 'tide' : 'stella')
 
 export const useSettings = create<Settings>(() => ({
-  apiKey: read(KEYS.apiKey),
+  apiKey: isAndroid() ? getNativeApiKey() : read(KEYS.apiKey),
   locale: initialLocale(),
   location: initialLocation(),
   themePreference: initialThemePreference(),
   ttsVoice: initialTtsVoice(),
   thinking: read(KEYS.thinking) === 'true',
   search: read(KEYS.search) === 'true',
+  safetyCheck: read(KEYS.safetyCheck) === 'true',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
 }))
 
@@ -119,8 +124,14 @@ export const setTtsVoice = (ttsVoice: TtsVoice) => {
   useSettings.setState({ ttsVoice })
 }
 
-export const setApiKey = (apiKey: string | null) => {
-  write(KEYS.apiKey, apiKey)
+export const setApiKey = async (apiKey: string | null) => {
+  if (isAndroid()) {
+    await saveNativeApiKey(apiKey)
+    // A legacy plaintext entry must never survive a successful secure save.
+    localStorage.removeItem(KEYS.apiKey)
+  } else {
+    write(KEYS.apiKey, apiKey)
+  }
   useSettings.setState({ apiKey })
 }
 
@@ -132,6 +143,12 @@ export const setThinking = (thinking: boolean) => {
 export const setSearch = (search: boolean) => {
   write(KEYS.search, String(search))
   useSettings.setState({ search })
+}
+
+/** Applies to subsequent HTTP requests immediately; never aborts or resends an in-flight reply. */
+export const setSafetyCheck = (safetyCheck: boolean) => {
+  write(KEYS.safetyCheck, String(safetyCheck))
+  useSettings.setState({ safetyCheck })
 }
 
 export const setSiderCollapsed = (siderCollapsed: boolean) => {

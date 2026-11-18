@@ -9,3 +9,13 @@ build/
 .env.*
 !.env.example
 tmp/
+android/.gradle/
+android/**/build/
+android/local.properties
+*.jks
+*.keystore
+*.apk
+*.aab
+playwright-report/
+test-results/
+artifacts/

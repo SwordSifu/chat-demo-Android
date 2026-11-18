@@ -7,6 +7,7 @@ import {
   type MutableRefObject,
   type RefObject,
 } from 'react'
+import { registerBackHandler } from '../../platform/back.js'
 
 /** 浮层与视口边缘的最小间距 */
 export const VIEWPORT_PADDING = 8
@@ -199,7 +200,7 @@ export const useAnchoredPosition = <T extends HTMLElement, F extends HTMLElement
   return { anchorRef, floatingRef, position }
 }
 
-/** 点击浮层与触发元素之外、或按 Esc 时关闭 */
+/** 点击浮层与触发元素之外、或按 Esc / Android 返回键时关闭 */
 export const useDismiss = (
   open: boolean,
   refs: RefObject<HTMLElement | null>[],
@@ -215,6 +216,10 @@ export const useDismiss = (
     if (!open) {
       return
     }
+    const unregisterBack = registerBackHandler(() => {
+      onDismissRef.current()
+      return true
+    }, 20)
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node
       const inside = refsRef.current.some((ref) => ref.current?.contains(target))
@@ -234,6 +239,7 @@ export const useDismiss = (
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown, captureEscape)
     return () => {
+      unregisterBack()
       document.removeEventListener('pointerdown', onPointerDown)
       document.removeEventListener('keydown', onKeyDown, captureEscape)
     }

@@ -1,5 +1,11 @@
+import { isAndroid, nativeCall } from '../platform/android.js'
+
 export const copyText = async (text: string): Promise<boolean> => {
   try {
+    if (isAndroid()) {
+      await nativeCall('copyText', { text })
+      return true
+    }
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text)
       return true

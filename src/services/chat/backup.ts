@@ -1,5 +1,6 @@
 import { formatDate } from '../../utils/format.js'
 import * as db from './db.js'
+import { liveRepliesSnapshot, withLiveReply } from './liveReply.js'
 import { replaceHistory, useChatStore } from './store.js'
 import type { Session } from './types.js'
 
@@ -21,6 +22,7 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
   enqueueBackup(async () => {
     // 列表和已加载内容保留导出开始时的快照；未打开的会话逐条读取，不填满详情缓存。
     const { sessions, sessionCache } = useChatStore.getState()
+    const liveReplies = liveRepliesSnapshot()
     async function* readSessions(): AsyncGenerator<Session> {
       for (const summary of sessions) {
         const session = Object.hasOwn(sessionCache, summary.id)
@@ -30,7 +32,7 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
           throw new Error(`History session disappeared during export: ${summary.id}`)
         }
         // 详情读取期间可能重命名，归档标题与开始时的列表保持一致。
-        yield { ...session, ...summary }
+        yield { ...withLiveReply(session, liveReplies.get(summary.id)), ...summary }
       }
     }
     const { exportArchive } = await import('./history/exportArchive.js')
