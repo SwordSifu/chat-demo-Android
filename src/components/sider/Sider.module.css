@@ -79,11 +79,123 @@
   margin-right: 6px;
 }
 
+.historySearch {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  margin-top: 16px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-secondary);
+
+  &:focus-within {
+    border-color: var(--dsw-alias-brand-primary);
+  }
+
+  & > svg {
+    flex-shrink: 0;
+  }
+
+  input {
+    width: 0;
+    flex: 1;
+    padding: 8px 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--dsw-alias-label-primary);
+    font: inherit;
+    font-size: 16px;
+  }
+}
+
+.historySearchClear {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--dsw-specific-sidebar-nav-item-hover);
+  }
+}
+
+.historyResults {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.historyResult {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  margin-bottom: 3px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+
+  &:hover,
+  &[aria-current='true'] {
+    background: var(--dsw-specific-sidebar-nav-item-hover);
+  }
+
+  &:focus-visible {
+    outline-offset: -2px;
+  }
+
+  mark {
+    border-radius: 2px;
+    background: #ffe5a5;
+    color: #302100;
+  }
+}
+
+.historyResultTitle,
+.historyResultExcerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  unicode-bidi: plaintext;
+}
+
+.historyResultTitle {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.historyResultExcerpt,
+.historySearchStatus {
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.historySearchStatus {
+  padding: 8px 10px;
+}
+
 .listWrap {
   position: relative;
   flex: 1;
   min-height: 0;
-  margin-top: 24px;
+  margin-top: 12px;
 }
 
 .list {

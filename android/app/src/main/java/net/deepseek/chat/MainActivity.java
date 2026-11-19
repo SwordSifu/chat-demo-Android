@@ -399,6 +399,20 @@ public final class MainActivity extends Activity {
         try {
             String action = string(request, "action");
             if ("saveBegin".equals(action)) { beginSave(request, reply); return; }
+            if ("clearWebViewCache".equals(action)) {
+                if (request.length() != 2) throw new JSONException("clearWebViewCache does not take arguments");
+                runOnUiThread(() -> {
+                    if (reply.generation != pageGeneration || !trustedCurrentPage()) return;
+                    try {
+                        web.clearCache(true);
+                        reply.success(null);
+                    } catch (RuntimeException e) {
+                        // This operation must not write to the existing diagnostics buffer either.
+                        reply.deliver(null, "native_error", "WebView cache could not be cleared");
+                    }
+                });
+                return;
+            }
             if ("copyText".equals(action)) {
                 String text = string(request, "text");
                 ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);

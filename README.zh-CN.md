@@ -4,7 +4,7 @@
 
 > **安卓分支（非官方）**：轻量原生 Java + 系统 WebView，内置本地网页，仅接 DeepSeek 官方 API。
 > 支持 Android 8.0+，需系统 WebView 105+（建议保持最新版）。安装、构建、测试范围及资源取舍见 [安卓说明](ANDROID.md)。
-> [安卓预发布 APK](https://github.com/SwordSifu/chat-demo-Android/releases) 供侧载测试。`pnpm android:debug` 生成本地调试 APK；商店分发前需配置正式签名并完成真机验收。
+> [从 GitHub Releases 下载安卓 APK](https://github.com/SwordSifu/chat-demo-Android/releases/latest)。安卓安装包仅在 GitHub 分发；`pnpm android:debug` 生成本地调试 APK。
 
 基于 DeepSeek API 的静态聊天示例。无需应用后端，浏览器直接请求配置的 API 服务。
 

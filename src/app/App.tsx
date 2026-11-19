@@ -1,5 +1,7 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useTranslate } from '../i18n/index.js'
+import type { HistorySearchResult, HistorySearchTarget } from '../services/chat/historySearch.js'
+import { HistorySearchNavigation } from '../components/messages/historySearchNavigation.js'
 import { useSettings } from '../services/settings.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
@@ -51,8 +53,67 @@ export const App = () => {
     state.activeId === null ? false : Object.hasOwn(state.streaming, state.activeId)
   )
   const activeId = useChatStore((state) => state.activeId)
+  const [searchTarget, setSearchTarget] = useState<HistorySearchTarget | null>(null)
+  const finishSearchNavigation = useCallback((target: HistorySearchTarget) => {
+    setSearchTarget((current) => (current === target ? null : current))
+  }, [])
+  const historySearchNavigation = useMemo(
+    () => ({ target: searchTarget, finish: finishSearchNavigation }),
+    [searchTarget, finishSearchNavigation]
+  )
 
   usePreventPageScroll(isMobile)
+
+  // A pending jump belongs only to this activation, not to a later retry, import, or return.
+  useLayoutEffect(
+    () =>
+      useChatStore.subscribe((state, previous) => {
+        if (
+          state.activeId === previous.activeId &&
+          state.importingHistory === previous.importingHistory &&
+          state.sessionLoadErrors === previous.sessionLoadErrors
+        ) {
+          return
+        }
+        setSearchTarget((target) => {
+          if (
+            target &&
+            (state.importingHistory ||
+              state.activeId !== target.sessionId ||
+              state.sessionLoadErrors[target.sessionId] === true)
+          ) {
+            return null
+          }
+          return target
+        })
+      }),
+    []
+  )
+
+  const openSearchResult = useCallback(
+    ({ sessionId, message }: HistorySearchResult, query: string) => {
+      const state = useChatStore.getState()
+      if (state.importingHistory) {
+        return
+      }
+      if (!state.sessions.some((summary) => summary.id === sessionId)) {
+        showToast({ key: 'historySearchSessionUnavailable', type: 'error' })
+        return
+      }
+      selectSession(sessionId)
+      const current = useChatStore.getState()
+      setSearchTarget(
+        message &&
+          current.activeId === sessionId &&
+          !current.importingHistory &&
+          current.sessionLoadErrors[sessionId] !== true
+          ? { sessionId, messageId: message.id, query }
+          : null
+      )
+      closeMobileSider()
+    },
+    []
+  )
 
   useEffect(() => {
     document.documentElement.lang = locale
@@ -111,7 +172,11 @@ export const App = () => {
   return (
     <>
       <div ref={frameRef} className={styles.frame}>
-        {isMobile ? <MobileSider /> : siderCollapsed ? null : <Sider />}
+        {isMobile ? (
+          <MobileSider onSearchResult={openSearchResult} />
+        ) : siderCollapsed ? null : (
+          <Sider onSearchResult={openSearchResult} />
+        )}
         <main className={styles.main}>
           {saveError ? (
             <div className={styles.saveError} role="alert">
@@ -155,11 +220,13 @@ export const App = () => {
                 </div>
               </div>
             ) : session ? (
-              <SessionView
-                session={session}
-                streaming={streaming}
-                siderCollapsed={siderCollapsed}
-              />
+              <HistorySearchNavigation.Provider value={historySearchNavigation}>
+                <SessionView
+                  session={session}
+                  streaming={streaming}
+                  siderCollapsed={siderCollapsed}
+                />
+              </HistorySearchNavigation.Provider>
             ) : (
               <Welcome />
             )}

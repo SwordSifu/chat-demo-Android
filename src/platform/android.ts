@@ -106,6 +106,11 @@ export const saveNativeApiKey = async (value: string | null): Promise<void> => {
   nativeApiKey = value
 }
 
+/** This bridge action clears only Android's WebView resource cache; it has no web fallback. */
+export const clearWebViewCache = async (): Promise<void> => {
+  await nativeCall('clearWebViewCache')
+}
+
 export const isSaveCancelled = (error: unknown) =>
   error instanceof NativeError && (error.message === 'cancelled' || error.code.toLowerCase() === 'cancelled')
 

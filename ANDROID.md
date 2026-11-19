@@ -7,9 +7,9 @@
 - 最低系统配置：Android 8.0 / API 26；目标 API 35。系统 WebView **105+**，建议始终更新到该设备可用的最新版本。
 - 低于要求会提示更新 WebView，不内置/下载另一个浏览器。系统版本满足不等于 WebView 版本一定满足。
 - APK 不含 ABI 专属原生库，不按 arm64/armv7/x86 拆包；实际兼容性仍以具体设备验证为准。
-- [1.0.6 GitHub 预发布 APK](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.6)：**2,227,488 字节（2.12 MiB）**，包名 `io.github.swordsifu.dsapichat`，versionCode 7，关闭应用与 WebView 调试。构建、验签与哈希见 [验证记录](VALIDATION.md)。
-- 预发布沿用 [1.0.5](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.5) 的开发签名，非应用商店正式版。自行构建的 `debug` 包可调试，仅供本地开发。
-- 同包名、同签名且版本号不降低时可覆盖安装保留数据。正式发布应自行保管稳定私有签名并递增版本号；开发签名更换为正式签名通常需要卸载，**先导出历史**。
+- [1.0.8 GitHub 正式版 APK](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.8)：**2,233,252 字节（2.13 MiB）**，包名 `io.github.swordsifu.dsapichat`，versionCode 9，关闭应用与 WebView 调试。构建、验签与哈希见 [验证记录](VALIDATION.md)。
+- 安装包仅在 GitHub Releases 分发，不上应用商店；正式版沿用 [1.0.7](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.7) 的签名。自行构建的 `debug` 包可调试，仅供本地开发。
+- 包名、签名不变且版本号递增，可直接覆盖旧版并保留数据，无需卸载。不要清除应用数据；重要历史可先导出备份。
 
 首次打开在“设置 → 数据管理”输入 API Key。Key 校验通过并成功写入原生加密存储才显示为已保存；无需在聊天、GitHub 或构建脚本里提供 Key。
 
@@ -24,7 +24,12 @@
 - 取消选择/保存不算成功；写入失败时尽力删除半成品，少数不支持删除的文档提供方可能残留不完整文件。
 - 录音仅在用户操作时请求麦克风权限。切后台取消录音/识别、停止朗读并尝试保存聊天增量；文件选择器触发暂停时不强制停止文本聊天。
 
-## 附件与引用（1.0.7 本地测试版）
+## 缓存与对话搜索（1.0.8）
+
+- **设置 → 数据管理 → 清理缓存**：经确认后释放可重新加载的非活跃会话详情；Android 另请求 WebView 清理资源缓存。不会清除聊天、附件、草稿、API Key、应用设置、本机用量或诊断日志，不刷新页面；导入或替换历史期间不可操作。结果标明内存条目数和原生请求状态，不估算磁盘空间。
+- **侧边栏 → 搜索对话**：按字面搜索标题和所选分支的提问、回答正文，包括已导入的记录。关键词不上传、不写日志；不搜索思考、工具结果、附件内容或草稿。按最近更新排序，点结果打开对应会话；正文命中可跳到消息，不会切换分支。
+
+## 附件与引用（1.0.7）
 
 本次移植 [上游 0.1.2 的附件与来源改进](https://github.com/deepseek-ai/chat-demo/commit/4ee2972e53da778db0191d0312938291e97f2a81)，不改变消息发送、API Key、历史数据库或备份格式。
 
@@ -135,7 +140,7 @@ node android/verify-apk.mjs
 
 `pnpm android:debug` 会先构建前端再打 APK；APK 的标准输出位置是 `android/app/build/outputs/apk/debug/app-debug.apk`。Gradle/依赖默认缓存到本工程 `android/.tools/`，不设置全局 Gradle 配置。首次构建需要下载依赖和校验过的固定版本 Gradle；缓存齐后可加 `--offline`。
 
-构建关闭调试的侧载预览包：先运行 `pnpm build`，再运行 `node android/build.mjs preview --no-daemon`，产物为 `android/app/build/outputs/apk/release/app-release.apk`。`preview` 显式使用当前构建环境的开发签名；他人自行构建的证书通常不同，不能覆盖 GitHub 预发布包。发布前应验证 `apksigner verify --print-certs` 的证书与上版一致。不要提交签名私钥、SDK 路径、日志或 APK；APK 只作 Release 附件。
+构建关闭调试的 GitHub 分发包：先运行 `pnpm build`，再运行 `node android/build.mjs preview --no-daemon`，产物为 `android/app/build/outputs/apk/release/app-release.apk`。`preview` 是沿用原有签名的构建入口，不决定 GitHub 是否标记为预发布。它使用当前构建环境的开发签名；他人自行构建的证书通常不同，不能覆盖 GitHub 发布包。发布前应验证 `apksigner verify --print-certs` 的证书与上版一致。不要提交签名私钥、SDK 路径、日志或 APK；APK 只作 Release 附件。
 
 浏览器回归默认使用本机 Edge，无额外浏览器下载；可设置 `PLAYWRIGHT_CHANNEL=chrome`。只启动隔离的本机测试服务器 4185，测试结束关闭，不替换任何已运行的 GUI。`pnpm test` 包含 JS 单元和浏览器回归，不代替安卓设备测试。
 

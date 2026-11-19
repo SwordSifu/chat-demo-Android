@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 > **Unofficial Android fork:** a small Java/system-WebView container with local assets and the official DeepSeek API only.
 > Android 8.0+ with WebView 105+ (keep it updated). See [Android build, privacy and verification notes](ANDROID.md).
-> [Android pre-release APKs](https://github.com/SwordSifu/chat-demo-Android/releases) are for sideload testing. `pnpm android:debug` builds a local debug APK. Store distribution requires device verification and a production signing key.
+> [Download the Android APK from GitHub Releases](https://github.com/SwordSifu/chat-demo-Android/releases/latest). Android builds are distributed only on GitHub. `pnpm android:debug` builds a local debug APK.
 
 A static chat demo powered by the DeepSeek API. No application backend is required: the browser connects directly to the configured API service.
 

@@ -2,6 +2,16 @@
 
 日期：2026-11-18（Asia/Hong_Kong）。上游基线 `5d5dd754ebc1948e977ddb880a9eb5aa25f37b4c`。1.0.6 基于 `android-lite` 上的 1.0.5 预发布；发布分支为 `android-lite`，不改 `main`。对应附件见 [v1.0.6 预发布](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.6)。
 
+## 1.0.8：清除缓存与本机对话搜索
+
+基于 `android-lite` 的 `v1.0.7`（`492142d`）。同一已验证 APK 用于 [v1.0.8 GitHub 正式版](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.8)。
+
+- `pnpm type`、`pnpm lint`（137 个文件，零警告/错误）、生产构建通过；JS 单测 **67/67**，桌面 Edge 回归 **54 项通过**（3 项可选导入基准未运行），Android JVM **44/44**。
+- 清除缓存：实测模拟浏览器释放闲置会话详情并按需重读；原聊天、附件、草稿、偏好、用量和诊断数据保留。单测覆盖活跃、生成中、加载中、删除中、保存未完成及失败的会话。模拟 Android 桥覆盖原生请求成功、失败、重复提交与导入重叠；原生代码通过编译，桥不新增权限、不清站点存储。
+- 搜索：合成 ZIP 导入 53 个会话后，结果按更新时间分 50/3 展示。空查询不扫描，搜索不读附件、不批量读正文、不发请求、不写库；新查询、关闭侧栏、导入时取消后续读取。覆盖中英文关键词、仅当前分支的提问和回答、排除思考/工具/草稿、不同会话重复消息 ID、冷加载定位、读取失败及重试。这里的读库次数和定位均来自桌面模拟，不是手机性能数据。
+- 非调试 APK **2,233,252 字节**，SHA-256 `da2df7a2f1855387818b51c15eaaff25a54d7eb2736e540be2171215eae756c4`。离线构建、Release Lint Vital、116 个资源、ZIP 对齐和 APK v2 验签通过。包名 `io.github.swordsifu.dsapichat`，versionCode 9，minSdk 26，targetSdk 35；与 1.0.7 同一签名证书，SHA-256 `53b689437132de29ccf69b1aecd928bc635dee47368c36e13ddd8204a3207fd7`。
+- `adb devices -l` 无连接设备；真实 WebView 缓存清除、真机覆盖安装和搜索体验待验。未调用真实账户或模型。
+
 ## 1.0.7：同步上游 0.1.2
 
 基于安卓 `v1.0.6`（`7af0447`）选择性移植上游 [`4ee2972`](https://github.com/deepseek-ai/chat-demo/commit/4ee2972e53da778db0191d0312938291e97f2a81)，前端版本对齐 [`429af5a`](https://github.com/deepseek-ai/chat-demo/commit/429af5a4558469496b231631e850fbccc0c30c87)。保留现有 API 上传分类、Android 桥与权限、IndexedDB 和备份格式。`android-lite` 合并上游 0.1.2 的提交历史时，保留上述已验证的 Android 适配实现；仅同步源码，不新增标签或 Release。

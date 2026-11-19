@@ -4,6 +4,13 @@ declare const styles: {
   readonly "appName": string;
   readonly "newChat": string;
   readonly "newChatIcon": string;
+  readonly "historySearch": string;
+  readonly "historySearchClear": string;
+  readonly "historyResults": string;
+  readonly "historyResult": string;
+  readonly "historyResultTitle": string;
+  readonly "historyResultExcerpt": string;
+  readonly "historySearchStatus": string;
   readonly "listWrap": string;
   readonly "list": string;
   readonly "section": string;

@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { isSaveCancelled, saveBlob } from '../../platform/android.js'
+import { clearWebViewCache, isAndroid, isSaveCancelled, saveBlob } from '../../platform/android.js'
 import { useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { clearDiagnostics, diagnosticArchive, diagnosticsEnabled, setDiagnosticLogging, subscribeDiagnostics } from '../../services/diagnostics.js'
 import {
@@ -19,7 +19,7 @@ import {
   type ImportProgress,
 } from '../../services/chat/backup.js'
 import { useIsMobile } from '../../app/viewport.js'
-import { selectSession, useChatStore } from '../../services/chat/store.js'
+import { clearInactiveSessionCache, selectSession, useChatStore } from '../../services/chat/store.js'
 import { regionCodes, getRegionName, provinces } from '../../services/location.js'
 import {
   isChineseBrowser,
@@ -42,7 +42,7 @@ import { closeSettings, useSettingsDialog, type SettingsSection } from './settin
 import styles from './Settings.module.css'
 
 /**
- * 设置弹窗：分「通用设置」（主题、语言、朗读音色、位置）与「数据管理」（API Key、导入、导出、删除）。
+ * 设置弹窗：分「通用设置」（主题、语言、朗读音色、位置）与「数据管理」（API Key、导入、导出、清缓存、删除）。
  * 桌面端为居中弹窗、左侧导航；移动端为底部弹层、导航横排在内容上方
  */
 export const SettingsDialog = () => {
@@ -71,6 +71,8 @@ const SettingsContent = () => {
   const historyDelete = useHistoryDelete()
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy = historyImport.busy || historyImport.file !== null || historyDelete.busy || replacingHistory
+  const cacheCleanup = useCacheCleanup(historyBusy)
+  const dataBusy = historyBusy || cacheCleanup.phase === 'running'
   return (
     <>
       <Modal
@@ -79,7 +81,7 @@ const SettingsContent = () => {
         className={styles.dialog}
         mainClassName={styles.dialogMain}
         onClose={() => {
-          if (!historyImport.busy && !historyImport.file && !historyDelete.busy) {
+          if (!historyImport.busy && !historyImport.file && !historyDelete.busy && cacheCleanup.canClose()) {
             closeSettings()
           }
         }}
@@ -113,9 +115,21 @@ const SettingsContent = () => {
           ) : (
             <>
               <ApiKeyField editor={apiKeyEditor} />
-              <ImportHistory historyImport={historyImport} disabled={historyBusy} />
-              <ExportHistory disabled={historyBusy} />
-              <DiagnosticsSettings disabled={historyBusy} />
+              <ImportHistory historyImport={historyImport} disabled={dataBusy} />
+              <ExportHistory disabled={dataBusy} />
+              <SettingCell
+                label={t('cacheCleanupTitle')}
+                description={t(cacheCleanup.android ? 'cacheCleanupAndroidScope' : 'cacheCleanupBrowserScope')}
+                status={cacheCleanup.appStatus}
+                secondaryStatus={cacheCleanup.nativeStatus}
+                action={
+                  <Button variant="outlined" size="m" className={styles.cellButton}
+                    disabled={dataBusy || cacheCleanup.phase !== 'idle'} onClick={cacheCleanup.open}>
+                    {t('cacheCleanupAction')}
+                  </Button>
+                }
+              />
+              <DiagnosticsSettings disabled={dataBusy} />
               <SettingCell
                 label={t('deleteAllSessions')}
                 status={null}
@@ -124,7 +138,7 @@ const SettingsContent = () => {
                     variant="dangerOutlined"
                     size="m"
                     className={styles.cellButton}
-                    disabled={historyBusy}
+                    disabled={dataBusy}
                     onClick={historyDelete.open}
                   >
                     {t('delete')}
@@ -138,8 +152,95 @@ const SettingsContent = () => {
       </Modal>
       {historyImport.file || historyImport.progress ? <ImportConfirm historyImport={historyImport} /> : null}
       {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
+      {cacheCleanup.phase !== 'idle' ? <CacheCleanupConfirm cleanup={cacheCleanup} disabled={historyBusy} /> : null}
     </>
   )
+}
+
+const CacheCleanupConfirm = ({ cleanup, disabled }: {
+  cleanup: ReturnType<typeof useCacheCleanup>
+  disabled: boolean
+}) => {
+  const t = useTranslate()
+  const busy = cleanup.phase === 'running'
+  return (
+    <Modal
+      title={t('cacheCleanupConfirmTitle')}
+      onClose={cleanup.cancel}
+      footer={
+        <div className={styles.deleteActions} aria-busy={busy}>
+          <Button variant="outlined" autoFocus disabled={busy} onClick={cleanup.cancel}>
+            {t('cancel')}
+          </Button>
+          <Button disabled={disabled || busy} onClick={() => void cleanup.confirm()}>
+            {t(busy ? 'cacheCleanupRunning' : 'cacheCleanupAction')}
+          </Button>
+        </div>
+      }
+    >
+      {t(cleanup.android ? 'cacheCleanupAndroidScope' : 'cacheCleanupBrowserScope')}{' '}
+      {t('cacheCleanupPreservation')}
+    </Modal>
+  )
+}
+
+const useCacheCleanup = (historyBusy: boolean) => {
+  type Phase = 'idle' | 'confirming' | 'running'
+  const [phase, setPhase] = useState<Phase>('idle')
+  const phaseRef = useRef<Phase>('idle')
+  const [appStatus, setAppStatus] = useState<Status>(null)
+  const [nativeStatus, setNativeStatus] = useState<Status>(null)
+  const android = isAndroid()
+  const transition = (next: Phase) => {
+    phaseRef.current = next
+    setPhase(next)
+  }
+  const blockedByHistory = () => historyBusy || useChatStore.getState().importingHistory
+
+  const confirm = async () => {
+    if (phaseRef.current !== 'confirming' || blockedByHistory()) {
+      return
+    }
+    // Consume this confirmation before any store update or native RPC can run.
+    transition('running')
+    setAppStatus(null)
+    setNativeStatus(null)
+    try {
+      const count = clearInactiveSessionCache()
+      setAppStatus({ key: 'cacheCleanupAppResult', params: { count } })
+      if (android) {
+        try {
+          await clearWebViewCache()
+          setNativeStatus({ key: 'cacheCleanupNativeResult' })
+        } catch {
+          setNativeStatus({ key: 'cacheCleanupNativeError', error: true })
+        }
+      }
+    } catch {
+      setAppStatus({ key: 'cacheCleanupAppError', error: true })
+    } finally {
+      transition('idle')
+    }
+  }
+
+  return {
+    phase,
+    android,
+    appStatus,
+    nativeStatus,
+    canClose: () => phaseRef.current !== 'running',
+    open: () => {
+      if (phaseRef.current === 'idle' && !blockedByHistory()) {
+        transition('confirming')
+      }
+    },
+    cancel: () => {
+      if (phaseRef.current === 'confirming') {
+        transition('idle')
+      }
+    },
+    confirm,
+  }
 }
 
 /** 删除确认保留在设置之上；失败可重试，成功只关闭确认弹窗。 */
@@ -521,6 +622,7 @@ const SettingCell = ({
   description,
   descriptionId,
   status,
+  secondaryStatus,
   statusAction,
   action,
   className,
@@ -529,6 +631,7 @@ const SettingCell = ({
   description?: string
   descriptionId?: string
   status: Status
+  secondaryStatus?: Status
   statusAction?: ReactNode
   action: ReactNode
   className?: string
@@ -547,6 +650,11 @@ const SettingCell = ({
             {status
               ? t(status.key, status.reason ? { message: t(status.reason) } : status.params)
               : description}
+          </div>
+        ) : null}
+        {secondaryStatus ? (
+          <div className={clsx(styles.description, secondaryStatus.error && styles.error)} aria-live="polite">
+            {t(secondaryStatus.key, secondaryStatus.params)}
           </div>
         ) : null}
         {statusAction}

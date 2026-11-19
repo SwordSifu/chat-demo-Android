@@ -62,13 +62,17 @@ export const UserMessage = memo(function UserMessage({
   }
 
   return (
-    <div className={clsx(styles.container, isFirst && styles.isFirst)}>
+    <div
+      className={clsx(styles.container, isFirst && styles.isFirst)}
+      data-history-message-id={message.id}
+    >
       {message.files.length > 0 ? (
         <div
           className={clsx(
             styles.files,
-            message.files.some((file) => !isAttachmentThumbnail(getAttachmentViewMime(file.name))) &&
-              styles.filesWithDocuments
+            message.files.some(
+              (file) => !isAttachmentThumbnail(getAttachmentViewMime(file.name))
+            ) && styles.filesWithDocuments
           )}
         >
           {message.files.map((file) => (

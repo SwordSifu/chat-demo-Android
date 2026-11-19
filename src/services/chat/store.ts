@@ -120,22 +120,25 @@ const sessionLoads = new Map<string, { promise: Promise<void> }>()
 
 const touchSession = (id: string) => sessionAccess.set(id, ++accessSequence)
 
-const trimSessionCache = () => {
+const evictSessionCache = (keep: number) => {
   const state = get()
   const ids = Object.keys(state.sessionCache)
-  if (ids.length <= SESSION_CACHE_LIMIT) {
-    return
+  if (state.importingHistory || ids.length <= keep) {
+    return 0
   }
-  const removable = ids
-    .filter(
-      (id) =>
-        id !== state.activeId &&
-        !Object.hasOwn(state.streaming, id) &&
-        !unsavedSessions.has(id) &&
-        !deletingSessions.has(id)
-    )
-    .sort((a, b) => (sessionAccess.get(a) ?? 0) - (sessionAccess.get(b) ?? 0))
-  const evicted = new Set(removable.slice(0, ids.length - SESSION_CACHE_LIMIT))
+  const removable = ids.filter(
+    (id) =>
+      id !== state.activeId &&
+      !Object.hasOwn(state.streaming, id) &&
+      !sessionLoads.has(id) &&
+      !unsavedSessions.has(id) &&
+      !pendingFiles.has(id) &&
+      !deletingSessions.has(id)
+  )
+  if (keep > 0) {
+    removable.sort((a, b) => (sessionAccess.get(a) ?? 0) - (sessionAccess.get(b) ?? 0))
+  }
+  const evicted = new Set(removable.slice(0, ids.length - keep))
   for (const id of evicted) {
     sessionAccess.delete(id)
   }
@@ -146,7 +149,13 @@ const trimSessionCache = () => {
       ),
     })
   }
+  return evicted.size
 }
+
+const trimSessionCache = () => evictSessionCache(SESSION_CACHE_LIMIT)
+
+/** 只释放可从 IndexedDB 恢复的非活跃会话详情，不写入或删除持久数据。 */
+export const clearInactiveSessionCache = () => evictSessionCache(0)
 
 const updateSession = (id: string, update: (session: Session) => Session) =>
   set((state) => {
@@ -348,7 +357,6 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
       if (session !== stored) {
         persist(id)
       }
-      trimSessionCache()
     } catch (error) {
       if (epoch === historyEpoch && sessionLoads.get(id) === load) {
         set((state) => ({ sessionLoadErrors: { ...state.sessionLoadErrors, [id]: true } }))
@@ -357,6 +365,7 @@ const ensureSessionLoaded = (id: string): Promise<void> => {
     } finally {
       if (sessionLoads.get(id) === load) {
         sessionLoads.delete(id)
+        trimSessionCache()
       }
     }
   })()

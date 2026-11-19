@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import { matchesHistorySearchMessage } from '../../services/chat/historySearch.js'
+import { showToast } from '../base/toastState.js'
+import { HistorySearchNavigation } from './historySearchNavigation.js'
 import { useIsMobile } from '../../app/viewport.js'
 import {
   buildMessageVersions,
@@ -43,6 +54,7 @@ export const MessageList = ({
   footer: React.ReactNode
 }) => {
   const isMobile = useIsMobile()
+  const historyNavigation = useContext(HistorySearchNavigation)
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const stickyRef = useRef(true)
@@ -141,6 +153,42 @@ export const MessageList = ({
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
   }, [isMobile, scrollToBottom])
+
+  useLayoutEffect(() => {
+    const target = historyNavigation?.target
+    if (!target || target.sessionId !== session.id) {
+      return
+    }
+    const state = useChatStore.getState()
+    if (
+      state.importingHistory ||
+      state.activeId !== session.id ||
+      !Object.hasOwn(state.sessionCache, session.id) ||
+      state.sessionCache[session.id] !== session
+    ) {
+      return
+    }
+
+    const message = messages.find(({ id }) => id === target.messageId)
+    const scroll = scrollRef.current
+    const anchor = scroll?.querySelector<HTMLElement>(
+      `[data-history-message-id="${CSS.escape(target.messageId)}"]`
+    )
+    if (
+      message &&
+      scroll &&
+      anchor &&
+      matchesHistorySearchMessage(message, target.query, streamingReplyId)
+    ) {
+      stickyRef.current = false
+      scroll.scrollTop +=
+        anchor.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 12
+      scrollTopRef.current = scroll.scrollTop
+    } else {
+      showToast({ key: 'historySearchMessageUnavailable', type: 'error' })
+    }
+    historyNavigation.finish(target)
+  }, [historyNavigation, isMobile, messages, session, streamingReplyId])
 
   const lastIndex = messages.length - 1
   const uploadRetryId = getUploadRetryId(messages, streaming)
