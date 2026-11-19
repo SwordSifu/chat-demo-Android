@@ -278,12 +278,11 @@ const ToolRow = ({
 )
 
 const PageLink = ({ page, failedTip }: { page: PageItem; failedTip?: string }) => {
-  const href = getSafeExternalUrl(page.url)
+  const href = page.url && getSafeExternalUrl(page.url)
+  const failed = page.status === 'failed'
   return (
-    <span
-      className={clsx(styles.page, page.status === 'failed' ? styles.pageFailed : styles.pageDone)}
-    >
-      {page.status === 'failed' ? (
+    <span className={clsx(styles.page, href && (failed ? styles.pageFailed : styles.pageDone))}>
+      {failed ? (
         <Tooltip content={failedTip}>
           <span className={styles.pageText}>{page.title}</span>
         </Tooltip>
@@ -294,9 +293,11 @@ const PageLink = ({ page, failedTip }: { page: PageItem; failedTip?: string }) =
       ) : (
         <span className={styles.pageText}>{page.title}</span>
       )}
-      <span className={styles.pageIcon}>
-        <IconRightUpOutline14 />
-      </span>
+      {href ? (
+        <span className={styles.pageIcon}>
+          <IconRightUpOutline14 />
+        </span>
+      ) : null}
     </span>
   )
 }
@@ -332,12 +333,18 @@ const OpenRow = ({
           {count > 5 ? (
             <span
               className={styles.chip}
-              onClick={() =>
+              onClick={() => {
+                const urls = new Set(
+                  step.pages.map((page) => page.url && getSafeExternalUrl(page.url))
+                )
                 toggleSearchPanel(
                   panelEntry,
-                  sources.filter((source) => step.pages.some((page) => page.url === source.url))
+                  sources.filter((source) => {
+                    const href = getSafeExternalUrl(source.url)
+                    return href !== undefined && urls.has(href)
+                  })
                 )
-              }
+              }}
             >
               {t('toolOpenViewAll')}
             </span>

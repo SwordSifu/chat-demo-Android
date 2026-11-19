@@ -48,7 +48,7 @@ export type SearchStep = {
 
 export type PageItem = {
   id: string
-  url: string
+  url?: string
   title: string
   status: ToolStatus
 }
@@ -79,11 +79,6 @@ export type ReplyView = {
   searchResults: Source[]
 }
 
-export const getSiteName = (url: string) => {
-  const safeUrl = getSafeExternalUrl(url)
-  return safeUrl ? new URL(safeUrl).hostname.replace(/^www\./, '') : ''
-}
-
 const getStatus = (
   result: WebSearchToolResultBlock | WebFetchToolResultBlock | undefined,
   streaming: boolean
@@ -112,17 +107,23 @@ class SourceRegistry {
     title: string | null,
     publishedAt: string | null,
     metadata?: Pick<WebSearchResult, 'snippet' | 'site_icon' | 'site_name'>
-  ): Source {
-    const siteName = metadata?.site_name?.trim() || getSiteName(url)
+  ): Source | null {
+    const safeUrl = getSafeExternalUrl(url)
+    if (!safeUrl) {
+      return null
+    }
+    // 指向同一外链的写法共用编号，但保留首次出现的原始来源信息。
+    const hostname = new URL(safeUrl).hostname.replace(/^www\./, '')
+    const siteName = metadata?.site_name?.trim() || hostname
     const snippet = metadata?.snippet?.trim() || null
     const siteIcon = metadata?.site_icon?.trim() || null
-    const existing = this.byUrl.get(url)
+    const existing = this.byUrl.get(safeUrl)
     if (existing) {
       // 同一网页可能先被打开，或先返回不完整元数据；后续结果补齐，不覆盖已有正文信息。
-      if (existing.title === url && title) {
+      if (existing.title === existing.url && title) {
         existing.title = title
       }
-      if (existing.siteName === getSiteName(url)) {
+      if (existing.siteName === hostname) {
         existing.siteName = siteName
       }
       existing.publishedAt ||= publishedAt
@@ -140,7 +141,7 @@ class SourceRegistry {
       index: this.list.length + 1,
     }
     this.list.push(source)
-    this.byUrl.set(url, source)
+    this.byUrl.set(safeUrl, source)
     return source
   }
 }
@@ -159,7 +160,10 @@ const joinTextBlocks = (
     text += block.text
     const indexes = new Set<number>()
     for (const citation of block.citations ?? []) {
-      indexes.add(registry.add(citation.url, citation.title, null).index)
+      const source = registry.add(citation.url, citation.title, null)
+      if (source) {
+        indexes.add(source.index)
+      }
     }
     const body = indexes.size > 0 ? block.text.trimEnd() : block.text
     markdown += body
@@ -196,7 +200,7 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
       for (const item of result.content) {
         if (item.type === 'web_search_result') {
           const source = registry.add(item.url, item.title, item.page_age, item)
-          if (!searchResults.includes(source)) {
+          if (source && !searchResults.includes(source)) {
             searchResults.push(source)
           }
         }
@@ -267,14 +271,17 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
 
     if (input.action === 'search') {
       const { queries } = input
-      const found =
-        result?.type === 'web_search_tool_result'
-          ? result.content.flatMap((item) =>
-              item.type === 'web_search_result'
-                ? [registry.add(item.url, item.title, item.page_age, item)]
-                : []
-            )
-          : []
+      const found = new Set<Source>()
+      if (result?.type === 'web_search_tool_result') {
+        for (const item of result.content) {
+          if (item.type === 'web_search_result') {
+            const source = registry.add(item.url, item.title, item.page_age, item)
+            if (source) {
+              found.add(source)
+            }
+          }
+        }
+      }
       // 普通搜索按种类聚合到首次出现的位置；边想边搜只合并相邻、同种类的调用。
       const target = isDeepSearchKind(kind)
         ? last?.type === 'search' && last.kind === kind
@@ -283,7 +290,11 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
         : mergedSearch.get(kind)
       if (target) {
         target.queries.push(...queries)
-        target.results.push(...found.filter((source) => !target.results.includes(source)))
+        for (const source of found) {
+          if (!target.results.includes(source)) {
+            target.results.push(source)
+          }
+        }
         target.status = mergeStatus([target.status, status])
       } else {
         const step: SearchStep = {
@@ -291,7 +302,7 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
           key: block.id,
           kind,
           queries: [...queries],
-          results: found,
+          results: [...found],
           status,
         }
         steps.push(step)
@@ -303,10 +314,11 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
     }
 
     const fetched = result?.type === 'web_fetch_tool_result' ? result.content : null
+    const url = input.url || (fetched?.type === 'web_fetch_result' ? fetched.url : '')
     const page: PageItem = {
       id: block.id,
-      url: input.url || (fetched?.type === 'web_fetch_result' ? fetched.url : ''),
-      title: (fetched?.type === 'web_fetch_result' ? fetched.content.title : null) || input.url,
+      ...(getSafeExternalUrl(url) ? { url } : {}),
+      title: (fetched?.type === 'web_fetch_result' ? fetched.content.title : null) || url,
       status,
     }
     if (input.action === 'read_link') {

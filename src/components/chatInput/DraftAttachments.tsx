@@ -5,7 +5,9 @@ import { useUploads, type UploadTask } from '../../services/attachments.js'
 import type { DraftAttachment } from '../../services/chat/drafts.js'
 import { IconCloseFill14, IconRefreshOutline16 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
+import { AttachmentAction, AttachmentImage } from '../files/AttachmentAction.js'
 import { FileCard } from '../files/FileCard.js'
+import { useAttachmentView } from '../files/useAttachmentView.js'
 import styles from './ChatInput.module.css'
 
 const UPLOADING: UploadTask = { status: 'uploading' }
@@ -48,6 +50,7 @@ const AttachmentItem = ({
   onRemove: () => void
 }) => {
   const t = useTranslate()
+  const { view, image } = useAttachmentView(item.file, item.file.name)
   const task = useUploads((state) => state.tasks[item.id] ?? UPLOADING)
   const status = task.status
   const error = task.status === 'error' ? t(task.error.key, task.error.params) : undefined
@@ -57,12 +60,13 @@ const AttachmentItem = ({
   const retryLabel = t('uploadRetry', { message: error ?? t('uploadFileStatusFailed') })
   // 「上传失败」只显示重试图标，其余原因写在图片上：可重试时在图标下方，不可重试时贴底
   const showReason = failed && error !== undefined && error !== t('uploadFileStatusFailed')
-  return item.previewUrl ? (
+  return image && (view === undefined || view?.thumbnail) ? (
     <div
       className={clsx(styles.attachment, failed && styles.attachmentFailed)}
       title={error ?? item.file.name}
     >
-      <img src={item.previewUrl} alt={item.file.name} />
+      {view?.thumbnail ? <AttachmentImage url={view.thumbnail} name={item.file.name} /> : null}
+      {view && status === 'done' ? <AttachmentAction view={view} name={item.file.name} /> : null}
       {status === 'uploading' ? <div className={styles.uploading} /> : null}
       {failed && retry ? (
         <Tooltip content={retryLabel}>
@@ -91,6 +95,7 @@ const AttachmentItem = ({
       name={item.file.name}
       size={item.file.size}
       status={status}
+      view={view}
       error={error}
       onRetry={retry}
       onRemove={onRemove}

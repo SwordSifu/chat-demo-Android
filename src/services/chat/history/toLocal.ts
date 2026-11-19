@@ -1,3 +1,4 @@
+import { getSafeExternalUrl } from '../../../utils/urls.js'
 import type {
   ServerToolUseBlock,
   WebFetchResult,
@@ -23,15 +24,6 @@ export type LocalSession = {
 }
 
 const time = (value: string) => Date.parse(value)
-
-/** 链接会渲染成 href，只接受 HTTP / HTTPS。 */
-const isWebUrl = (value: string) => {
-  try {
-    return ['http:', 'https:'].includes(new URL(value).protocol)
-  } catch {
-    return false
-  }
-}
 
 const toFile = (file: FileEntry): FileAttachment => ({
   id: file.id,
@@ -103,7 +95,7 @@ const unavailable: WebFetchToolResultBlock['content'] = {
  * 片段一次性转换为正式内容块，展示、请求和导出共用：
  * - 普通搜索与边想边搜共用 TOOL_SEARCH，以同一回复是否有打开 / 查找网页来区分；
  * - READ_LINK 将 URL、标题和签名存入工具结果；仅含签名的结果也保留；
- * - 没有链接的 TOOL_OPEN 不展示；
+ * - TOOL_OPEN 缺少有效链接时，只展示已完成且有标题的网页；
  * - 没有对应展示的片段直接丢弃。
  */
 const toBlocks = (fragments: Fragment[], messageId: string): ReplyBlock[] => {
@@ -142,14 +134,14 @@ const toBlocks = (fragments: Fragment[], messageId: string): ReplyBlock[] => {
                   item.status === 'FAILED'
                     ? [{ type: 'web_search_tool_result_error', error_code: 'unavailable' }]
                     : item.results
-                        .filter((result) => isWebUrl(result.url))
+                        .filter((result) => getSafeExternalUrl(result.url))
                         .map((result) => ({
                           type: 'web_search_result',
                           url: result.url,
                           title: result.title,
                           snippet: result.snippet,
                           site_icon:
-                            result.site_icon && isWebUrl(result.site_icon)
+                            result.site_icon && getSafeExternalUrl(result.site_icon)
                               ? result.site_icon
                               : null,
                           site_name: result.site_name,
@@ -158,23 +150,23 @@ const toBlocks = (fragments: Fragment[], messageId: string): ReplyBlock[] => {
                         })),
               }
         )
-      case 'TOOL_OPEN':
-        if (!item.url || !isWebUrl(item.url)) {
+      case 'TOOL_OPEN': {
+        const url = item.url && getSafeExternalUrl(item.url) ? item.url : ''
+        if (!url && (item.status !== 'FINISHED' || !item.title?.trim())) {
           return []
         }
         return toolBlocks(
           id,
-          { action: 'open_page', url: item.url },
+          { action: 'open_page', url },
           'deep_search',
           item.status === 'WIP'
             ? undefined
             : fetchResult(
                 id,
-                item.status === 'FINISHED'
-                  ? fetched(item.url, item.title, item.published_at)
-                  : unavailable
+                item.status === 'FINISHED' ? fetched(url, item.title, item.published_at) : unavailable
               )
         )
+      }
       case 'TOOL_FIND':
         return toolBlocks(
           id,
@@ -186,7 +178,7 @@ const toBlocks = (fragments: Fragment[], messageId: string): ReplyBlock[] => {
         )
       case 'READ_LINK':
         return item.results.flatMap((result, resultIndex) => {
-          const url = result.url && isWebUrl(result.url) ? result.url : ''
+          const url = result.url && getSafeExternalUrl(result.url) ? result.url : ''
           if (!url && !result.signature.trim()) {
             return []
           }

@@ -2,6 +2,15 @@
 
 日期：2026-11-18（Asia/Hong_Kong）。上游基线 `5d5dd754ebc1948e977ddb880a9eb5aa25f37b4c`。1.0.6 基于 `android-lite` 上的 1.0.5 预发布；发布分支为 `android-lite`，不改 `main`。对应附件见 [v1.0.6 预发布](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.6)。
 
+## 1.0.7：同步上游 0.1.2
+
+基于安卓 `v1.0.6`（`7af0447`）选择性移植上游 [`4ee2972`](https://github.com/deepseek-ai/chat-demo/commit/4ee2972e53da778db0191d0312938291e97f2a81)，前端版本对齐 [`429af5a`](https://github.com/deepseek-ai/chat-demo/commit/429af5a4558469496b231631e850fbccc0c30c87)。保留现有 API 上传分类、Android 桥与权限、IndexedDB 和备份格式。`android-lite` 合并上游 0.1.2 的提交历史时，保留上述已验证的 Android 适配实现；仅同步源码，不新增标签或 Release。
+
+- `pnpm type`、`pnpm lint`（134 个文件，零警告/错误）、生产构建均通过；JS 单测 58/58，桌面 Edge 回归 43 项通过，3 项可选性能基准未运行；Android JVM 单测 44/44。
+- 新用例覆盖草稿和历史附件按扩展名选择动作、图片解码失败后按原字节保存、缺失原件、对象 URL 释放，以及有效来源连续编号、等价 URL 去重和无效页面标题的纯文本显示。大备份导入、官方余额及本机用量的既有模拟回归通过；未调用真实账户/模型。
+- 本地非调试 APK 为 **2,228,394 字节**，SHA-256 `0d68cb6fcc3505932bdf2236eeebe94f0d196f62ba9411de1c5d92197ab90f1e`。离线构建、Release Lint Vital、116 个打包资源、ZIP 对齐和 APK v2 签名验证通过；与 v1.0.6 同一开发证书（SHA-256 `53b689437132de29ccf69b1aecd928bc635dee47368c36e13ddd8204a3207fd7`）。包名、SDK 下限和权限未改，versionCode 8，无 `application-debuggable`。
+- `adb devices -l` 未发现设备。真机覆盖安装、系统保存对话框及系统浏览器行为仍待验证。
+
 ## 1.0.6：大备份导入与账户页
 
 使用 Windows Edge headless、模拟 Android 桥和合成 v3 ZIP，分别对 1.0.5 与 1.0.6 的生产构建单次计时。未访问真实聊天记录。`HISTORY_BENCH=1 pnpm exec playwright test history-benchmark` 可重复采样。

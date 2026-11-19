@@ -6,6 +6,7 @@ import { IconEditOutline16 } from '../base/icons.js'
 import { editMessage, retryUpload } from '../../services/chat/store.js'
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import type { UserMessage as UserMessageType } from '../../services/chat/types.js'
+import { getAttachmentViewMime, isAttachmentThumbnail } from '../../utils/attachmentPreview.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
 import { ensureApiKey } from '../settings/settingsDialogState.js'
@@ -66,7 +67,8 @@ export const UserMessage = memo(function UserMessage({
         <div
           className={clsx(
             styles.files,
-            message.files.some((file) => !file.isImage) && styles.filesWithDocuments
+            message.files.some((file) => !isAttachmentThumbnail(getAttachmentViewMime(file.name))) &&
+              styles.filesWithDocuments
           )}
         >
           {message.files.map((file) => (

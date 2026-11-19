@@ -1,42 +1,13 @@
 import clsx from 'clsx'
-import { isAndroid, isSaveCancelled, saveBlob } from '../../platform/android.js'
-import { Modal } from '../base/Modal.js'
-import { showToast } from '../base/toastState.js'
-import { useEffect, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { useUploads } from '../../services/attachments.js'
-import { loadFile } from '../../services/chat/db.js'
 import type { FileAttachment } from '../../services/chat/types.js'
 import { IconPhotoErrorFill20, IconRefreshOutline16 } from '../base/icons.js'
 import { Tooltip } from '../base/Tooltip.js'
+import { AttachmentAction, AttachmentImage } from '../files/AttachmentAction.js'
 import { FileCard } from '../files/FileCard.js'
+import { useAttachmentView } from '../files/useAttachmentView.js'
 import styles from './MessageFile.module.css'
-
-/** 原件从 IndexedDB 读出并生成本地地址；undefined 表示加载中，null 表示原件缺失。 */
-const useFileUrl = (id: string) => {
-  const [fileUrl, setFileUrl] = useState<{ id: string; url: string | null } | null>(null)
-  useEffect(() => {
-    let objectUrl: string | null = null
-    let cancelled = false
-    loadFile(id).then((blob) => {
-      if (!cancelled) {
-        objectUrl = blob ? URL.createObjectURL(blob) : null
-        setFileUrl({ id, url: objectUrl })
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        setFileUrl({ id, url: null })
-      }
-    })
-    return () => {
-      cancelled = true
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl)
-      }
-    }
-  }, [id])
-  return fileUrl?.id === id ? fileUrl.url : undefined
-}
 
 /** 历史或失效附件的补传状态：只在还没有 serverId 时显示 */
 const useUploadState = (file: FileAttachment) =>
@@ -63,29 +34,7 @@ export const MessageFile = ({
   onRetry: (() => void) | null
 }) => {
   const t = useTranslate()
-  const url = useFileUrl(file.id)
-  const [failedUrl, setFailedUrl] = useState<string | null>(null)
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const saveOriginal = async () => {
-    if (saving) {
-      return
-    }
-    setSaving(true)
-    try {
-      const blob = await loadFile(file.id)
-      if (!blob) {
-        throw new Error('Local attachment unavailable')
-      }
-      await saveBlob(blob, file.name)
-    } catch (error) {
-      if (!isSaveCancelled(error)) {
-        showToast(error instanceof Error ? error.message : String(error))
-      }
-    } finally {
-      setSaving(false)
-    }
-  }
+  const { view, image } = useAttachmentView(file.id, file.name)
   const upload = useUploadState(file)
   const uploading = upload?.status === 'uploading'
   const failed = upload?.status === 'error'
@@ -94,16 +43,8 @@ export const MessageFile = ({
 
   const retry = retryable ? onRetry : null
 
-  if (file.isImage && url !== null) {
-    const preview = url ? (
-      failedUrl === url ? (
-        <span className={styles.failedIcon} role="img" aria-label={file.name}>
-          <IconPhotoErrorFill20 />
-        </span>
-      ) : (
-        <img src={url} alt={file.name} onError={() => setFailedUrl(url)} />
-      )
-    ) : null
+  if (image && (view === undefined || view?.thumbnail)) {
+    const preview = view?.thumbnail ? <AttachmentImage url={view.thumbnail} name={file.name} /> : null
 
     // 上传中：本地原件已在 IndexedDB，先垫在蒙层下显示，避免只有一块灰色占位
     if (uploading) {
@@ -162,30 +103,11 @@ export const MessageFile = ({
       )
     }
 
-    // 正常态：链接到原件
-    if (url && isAndroid()) {
-      return <>
-        <button type="button" className={clsx(styles.image, styles.imageThumb)}
-          title={file.name} onClick={() => setPreviewOpen(true)}>{preview}</button>
-        {previewOpen ? <Modal title={file.name} closable onClose={() => setPreviewOpen(false)}
-          footer={<button type="button" disabled={saving} onClick={() => void saveOriginal()}>{t('exportAllDownload')}</button>}>
-          <img src={url} alt={file.name} style={{ maxWidth: '100%', maxHeight: '65vh', objectFit: 'contain' }} />
-        </Modal> : null}
-      </>
-    }
-    return url ? (
-      <a
-        className={clsx(styles.image, styles.imageThumb)}
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        title={file.name}
-      >
+    return (
+      <div className={clsx(styles.image, styles.imageThumb)} title={file.name}>
         {preview}
-      </a>
-    ) : (
-      // 原件还没加载出来（极短暂）
-      <div className={styles.image} />
+        {view ? <AttachmentAction name={file.name} view={view} /> : null}
+      </div>
     )
   }
 
@@ -196,9 +118,7 @@ export const MessageFile = ({
       status={uploading ? 'uploading' : failed ? 'error' : 'done'}
       error={errorText}
       onRetry={retry ?? undefined}
-      onOpen={url && !upload && !saving
-        ? isAndroid() ? () => void saveOriginal() : () => window.open(url, '_blank', 'noreferrer')
-        : undefined}
+      view={view}
     />
   )
 }
