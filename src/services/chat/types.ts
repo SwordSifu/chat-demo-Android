@@ -17,6 +17,8 @@ import type {
 export type FileAttachment = {
   id: string
   serverId: string | null
+  /** 已确认符合图片长边限制的 file_id；必须等于当前 serverId 才有效。 */
+  imageSizeCheckedFor?: string
   name: string
   size: number
   /** 附件类别；导入时沿用归档的 is_image，不由 MIME 识别结果决定。 */

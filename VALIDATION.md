@@ -2,6 +2,16 @@
 
 日期：2026-11-18（Asia/Hong_Kong）。上游基线 `5d5dd754ebc1948e977ddb880a9eb5aa25f37b4c`。1.0.6 基于 `android-lite` 上的 1.0.5 预发布；发布分支为 `android-lite`，不改 `main`。对应附件见 [v1.0.6 预发布](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.6)。
 
+## 1.0.9：同步上游 0.1.3，修复超大图片上传
+
+`main` 快进到上游 [`8ad7b56`](https://github.com/deepseek-ai/chat-demo/commit/8ad7b56e196b87d8a3215dc09476d6d146ad3f0e)；`android-lite` 基于 v1.0.8（`ac5c66d`）选择性移植大图修复，不覆盖 Android 适配。
+
+- `pnpm type`、`pnpm lint`（138 文件、零警告/错误）和生产构建通过。JS 单测 **73/73**，桌面 Edge 回归 **59 项通过**（3 项可选导入性能基准未运行），Android JVM **44/44**。
+- 浏览器拦截模拟 Files API，确认仅超过 4096 像素的横图、竖图等比缩小；4096 边界、尺寸未知的新附件、非图片保持原字节，未确认尺寸不作已检查标记。预览、模拟系统保存及 ZIP 备份均保留原图。
+- 旧图回归覆盖本轮重新生成、进入上下文的历史、跳过无效轮次、缺失或不可解码原件保留旧 ID、检查中停止生成、刷新复用和备份重新导入后不复用旧任务。没有迁移数据库或更改 ZIP 结构。
+- release APK **2,234,272 字节**，SHA-256 `ee6962322fd18df54381572cdc24b5028eb64909a36733bde68d3de7cc7da29b`。离线构建、Release Lint Vital、116 个资源逐字节核对、ZIP 对齐及 APK v2 验签通过。包名 `io.github.swordsifu.dsapichat`，versionCode 10，minSdk 26，targetSdk 35，不可调试；证书与 v1.0.8 一致，SHA-256 `53b689437132de29ccf69b1aecd928bc635dee47368c36e13ddd8204a3207fd7`。
+- `adb devices -l` 未发现设备；未实测真机覆盖升级、实际 WebView 上的大图表现或真实 DeepSeek Files API。
+
 ## 1.0.8：清除缓存与本机对话搜索
 
 基于 `android-lite` 的 `v1.0.7`（`492142d`）。同一已验证 APK 用于 [v1.0.8 GitHub 正式版](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.8)。

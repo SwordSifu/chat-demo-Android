@@ -7,8 +7,8 @@
 - 最低系统配置：Android 8.0 / API 26；目标 API 35。系统 WebView **105+**，建议始终更新到该设备可用的最新版本。
 - 低于要求会提示更新 WebView，不内置/下载另一个浏览器。系统版本满足不等于 WebView 版本一定满足。
 - APK 不含 ABI 专属原生库，不按 arm64/armv7/x86 拆包；实际兼容性仍以具体设备验证为准。
-- [1.0.8 GitHub 正式版 APK](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.8)：**2,233,252 字节（2.13 MiB）**，包名 `io.github.swordsifu.dsapichat`，versionCode 9，关闭应用与 WebView 调试。构建、验签与哈希见 [验证记录](VALIDATION.md)。
-- 安装包仅在 GitHub Releases 分发，不上应用商店；正式版沿用 [1.0.7](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.7) 的签名。自行构建的 `debug` 包可调试，仅供本地开发。
+- [1.0.9 GitHub 正式版 APK](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.9)：**2,234,272 字节（2.13 MiB）**，包名 `io.github.swordsifu.dsapichat`，versionCode 10，关闭应用与 WebView 调试。构建、验签与哈希见 [验证记录](VALIDATION.md)。
+- 安装包仅在 GitHub Releases 分发，不上应用商店；正式版沿用 [1.0.8](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.8) 的签名。自行构建的 `debug` 包可调试，仅供本地开发。
 - 包名、签名不变且版本号递增，可直接覆盖旧版并保留数据，无需卸载。不要清除应用数据；重要历史可先导出备份。
 
 首次打开在“设置 → 数据管理”输入 API Key。Key 校验通过并成功写入原生加密存储才显示为已保存；无需在聊天、GitHub 或构建脚本里提供 Key。
@@ -23,6 +23,12 @@
 - ZIP/附件保存使用系统“另存为”，每次只传输 48 KiB 二进制对应的 Base64，顺序写入，不把整个文件再编码成巨大字符串。导出归档本身仍遵循上游 ZIP 实现，超大历史不是完全零拷贝。
 - 取消选择/保存不算成功；写入失败时尽力删除半成品，少数不支持删除的文档提供方可能残留不完整文件。
 - 录音仅在用户操作时请求麦克风权限。切后台取消录音/识别、停止朗读并尝试保存聊天增量；文件选择器触发暂停时不强制停止文本聊天。
+
+## 大图上传（1.0.9）
+
+移植 [上游 0.1.3 的 Files API 图片修复](https://github.com/deepseek-ai/chat-demo/commit/b53b77f09f4d9d743a3bb6593e61e4716e17c356)。长边超过 4096 像素才等比缩小上传副本；预览、保存和历史备份都保留原图。缩小后的动图副本只含一帧；无法确认尺寸的新附件保留原上传行为，由服务端判断格式是否支持。
+
+生成消息时，实际进入请求的旧图片只在确认原图超限时补传；本机没有原件或读不到尺寸则保留原引用。普通文档的上传和历史 ZIP 格式不变。
 
 ## 缓存与对话搜索（1.0.8）
 

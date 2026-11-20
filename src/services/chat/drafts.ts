@@ -107,6 +107,7 @@ export const prepareDraftMessage = (draft: Draft, tasks: Record<string, UploadTa
     files.push({
       id: attachment.id,
       serverId: task.serverId,
+      imageSizeCheckedFor: task.imageSizeCheckedFor,
       name: attachment.file.name,
       size: attachment.file.size,
       isImage: attachment.isImage,

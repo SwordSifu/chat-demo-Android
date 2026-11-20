@@ -124,7 +124,7 @@ const enqueueUpload = (
   isImage: boolean,
   signal: AbortSignal
 ) =>
-  new Promise<string>((resolve, reject) => {
+  new Promise<UploadedAttachment>((resolve, reject) => {
     queue.push(async () => {
       if (signal.aborted) {
         reject(signal.reason)
@@ -132,7 +132,8 @@ const enqueueUpload = (
       }
       try {
         const body = file instanceof File ? file : new File([file], name, { type: file.type })
-        resolve((await uploadFile(apiKey, body, getUploadPurpose(name, isImage), signal)).id)
+        const { id, imageSizeChecked } = await uploadFile(apiKey, body, getUploadPurpose(name, isImage), signal)
+        resolve({ serverId: id, ...(imageSizeChecked ? { imageSizeCheckedFor: id } : {}) })
       } catch (error) {
         reject(error)
       }
@@ -145,9 +146,10 @@ const enqueueUpload = (
  * 不会重复上传；导入的历史附件没有任务，发送前按本地原件补传。
  * 任务只在内存里，历史附件补传未完成时，刷新后会在下次请求前重新上传。
  */
+export type UploadedAttachment = { serverId: string; imageSizeCheckedFor?: string }
 export type UploadTask =
   | { status: 'uploading' }
-  | { status: 'done'; serverId: string }
+  | ({ status: 'done' } & UploadedAttachment)
   | { status: 'error'; error: TranslationMessage; retryable: boolean }
 
 type UploadState = { tasks: Record<string, UploadTask> }
@@ -161,7 +163,7 @@ const setTask = (id: string, task: UploadTask | null) =>
       : Object.fromEntries(Object.entries(state.tasks).filter(([key]) => key !== id)),
   }))
 
-const pending = new Map<string, { promise: Promise<string>; controller: AbortController }>()
+const pending = new Map<string, { promise: Promise<UploadedAttachment>; controller: AbortController }>()
 
 /** 开始（或复用进行中的）上传，返回服务端 file_id；失败时任务记为 error 并抛出原错误 */
 export const uploadAttachment = (
@@ -170,7 +172,7 @@ export const uploadAttachment = (
   blob: Blob,
   name: string,
   isImage: boolean
-): Promise<string> => {
+): Promise<UploadedAttachment> => {
   const current = pending.get(id)
   if (current) {
     return current.promise
@@ -178,11 +180,15 @@ export const uploadAttachment = (
   const controller = new AbortController()
   setTask(id, { status: 'uploading' })
   const promise = enqueueUpload(apiKey, blob, name, isImage, controller.signal)
-    .then((serverId) => {
-      setTask(id, { status: 'done', serverId })
-      return serverId
+    .then((uploaded) => {
+      controller.signal.throwIfAborted()
+      setTask(id, { status: 'done', ...uploaded })
+      return uploaded
     })
     .catch((error: unknown) => {
+      if (pending.get(id)?.controller !== controller) {
+        throw error
+      }
       if (controller.signal.aborted) {
         setTask(id, null)
       } else {
@@ -200,7 +206,11 @@ export const uploadAttachment = (
       }
       throw error
     })
-    .finally(() => pending.delete(id))
+    .finally(() => {
+      if (pending.get(id)?.controller === controller) {
+        pending.delete(id)
+      }
+    })
   pending.set(id, { promise, controller })
   return promise
 }
@@ -208,6 +218,15 @@ export const uploadAttachment = (
 export const cancelUpload = (id: string) => {
   pending.get(id)?.controller.abort()
   setTask(id, null)
+}
+
+/** 历史替换后，相同本地 id 可能指向新原件，不能复用旧任务。 */
+export const resetUploadTasks = () => {
+  for (const { controller } of pending.values()) {
+    controller.abort()
+  }
+  pending.clear()
+  useUploads.setState({ tasks: {} })
 }
 
 /** 各扩展名对应的 MIME：部分系统（如 Windows）给不出 file.type，按扩展名补齐 */

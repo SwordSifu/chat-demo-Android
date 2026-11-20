@@ -715,6 +715,271 @@ test('image upload uses official Files API and safe in-app preview/save', async 
   expect(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk, 'base64')))).toEqual(png)
 })
 
+async function pngFixture(page, width, height) {
+  const data = await page.evaluate(([width, height]) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#1789be'
+    ctx.fillRect(0, 0, width, height)
+    return canvas.toDataURL('image/png').split(',')[1]
+  }, [width, height])
+  return Buffer.from(data, 'base64')
+}
+
+async function mockFileUploads(page) {
+  const uploads = []
+  await page.route('https://api.deepseek.com/anthropic/v1/files', async (route) => {
+    const request = route.request()
+    const headers = {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'POST, OPTIONS',
+      'access-control-allow-headers': '*',
+    }
+    if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers })
+    const form = await new Response(request.postDataBuffer(), {
+      headers: { 'content-type': request.headers()['content-type'] },
+    }).formData()
+    expect([...form.keys()]).toEqual(form.has('purpose') ? ['purpose', 'file'] : ['file'])
+    const file = form.get('file')
+    const id = `file-sized-${uploads.length + 1}`
+    uploads.push({ id, name: file.name, mime: file.type, purpose: form.get('purpose'), bytes: Buffer.from(await file.arrayBuffer()) })
+    await route.fulfill({ headers, json: { id } })
+  })
+  return uploads
+}
+
+const fileIds = (body) => body.messages.flatMap(({ content }) =>
+  Array.isArray(content) ? content.filter((block) => block.source?.type === 'file').map((block) => block.source.file_id) : [])
+const pngDimensions = (bytes) => [bytes.readUInt32BE(16), bytes.readUInt32BE(20)]
+
+async function legacyImageHistory(page) {
+  const wide = await pngFixture(page, 5000, 250)
+  const tall = await pngFixture(page, 200, 5000)
+  const edge = await pngFixture(page, 80, 4096)
+  const docs = [
+    ['wide', wide, 'file-old-wide', 'file-previous-copy'],
+    ['edge', edge, 'file-old-edge'],
+    ['missing', null, 'file-old-missing'],
+    ['undecodable', Buffer.from('not a decodable image'), 'file-old-undecodable'],
+    ['checked', wide, 'file-checked-copy', 'file-checked-copy'],
+    ['hidden', tall, 'file-old-hidden'],
+  ]
+  await page.evaluate(async (docs) => {
+    const db = await new Promise((resolve, reject) => {
+      const open = indexedDB.open('chat-demo')
+      open.onsuccess = () => resolve(open.result)
+      open.onerror = () => reject(open.error)
+    })
+    try {
+      const now = Date.now()
+      const summary = { id: 'legacy-images', title: '旧图样本', createdAt: now, updatedAt: now }
+      const tx = db.transaction(['sessions', 'sessionSummaries', 'files'], 'readwrite')
+      const files = docs.map(([id, base64, serverId, imageSizeCheckedFor]) => {
+        const blob = base64 === null ? null : new Blob([Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))], { type: 'image/png' })
+        if (blob) tx.objectStore('files').put({ id, blob })
+        return { id, name: `${id}.png`, size: blob?.size ?? 12, isImage: true, mimeType: 'image/png', serverId, imageSizeCheckedFor }
+      })
+      const messages = [
+        { id: 'q', role: 'user', parentId: null, selectedChildId: 'a', content: '先前的问题', files: files.slice(0, -1) },
+        { id: 'a', role: 'assistant', parentId: 'q', selectedChildId: 'q2', status: 'done', blocks: [{ type: 'text', text: '先前的回复' }] },
+        { id: 'q2', role: 'user', parentId: 'a', selectedChildId: 'a2', content: '失败的轮次', files: files.slice(-1) },
+        { id: 'a2', role: 'assistant', parentId: 'q2', status: 'error', blocks: [] },
+      ].map((message) => ({ ...message, createdAt: now }))
+      tx.objectStore('sessions').put({ ...summary, rootMessageId: 'q', messages })
+      tx.objectStore('sessionSummaries').put({ ...summary, fileIds: files.map((file) => file.id) })
+      await new Promise((resolve, reject) => {
+        tx.oncomplete = resolve
+        tx.onabort = () => reject(tx.error)
+      })
+    } finally { db.close() }
+  }, docs.map(([id, buffer, serverId, checked]) => [id, buffer?.toString('base64') ?? null, serverId, checked]))
+  await reopenLegacyImages(page)
+}
+
+async function reopenLegacyImages(page) {
+  await page.reload()
+  await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+  await page.getByText('旧图样本', { exact: true }).click()
+  await expect(page.getByText('先前的回复', { exact: true })).toBeVisible()
+}
+
+async function savedLegacyFiles(page) {
+  return page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const open = indexedDB.open('chat-demo')
+      open.onsuccess = () => resolve(open.result)
+      open.onerror = () => reject(open.error)
+    })
+    try {
+      return await new Promise((resolve, reject) => {
+        const read = db.transaction('sessions').objectStore('sessions').get('legacy-images')
+        read.onsuccess = () => resolve(read.result.messages[0].files)
+        read.onerror = () => reject(read.error)
+      })
+    } finally { db.close() }
+  })
+}
+
+test('Files API resizes only oversized pixels; preview, save and ZIP keep original bytes', async ({ page }) => {
+  await setup(page)
+  const requests = await mockChat(page)
+  const uploads = await mockFileUploads(page)
+  await page.goto('/')
+  const wide = await pngFixture(page, 5000, 250)
+  const tall = await pngFixture(page, 200, 4097)
+  const edge = await pngFixture(page, 4096, 80)
+  const notes = Buffer.from('original document data')
+  await page.locator('input[type=file][multiple]').setInputFiles([
+    { name: 'wide.png', mimeType: 'image/png', buffer: wide },
+    { name: 'tall.png', mimeType: 'image/png', buffer: tall },
+    { name: 'edge.png', mimeType: 'image/png', buffer: edge },
+    { name: 'notes.txt', mimeType: 'text/plain', buffer: notes },
+  ])
+  await send(page, '检查上传附件')
+  await expect(page.getByText('这是模拟接口的回答。', { exact: true })).toBeVisible()
+  expect(uploads).toHaveLength(4)
+  const byName = Object.fromEntries(uploads.map((file) => [file.name, file]))
+  expect(pngDimensions(byName['wide.png'].bytes)).toEqual([4096, 205])
+  expect(pngDimensions(byName['tall.png'].bytes)).toEqual([200, 4096])
+  expect(byName['edge.png'].bytes).toEqual(edge)
+  expect(byName['notes.txt']).toMatchObject({ purpose: 'user_data', mime: 'text/plain', bytes: notes })
+  expect(uploads.filter(({ mime }) => mime === 'image/png').every(({ purpose }) => purpose === null)).toBe(true)
+  expect(fileIds(requests[0])).toEqual(['wide.png', 'tall.png', 'edge.png', 'notes.txt'].map((name) => byName[name].id))
+
+  await page.getByRole('button', { name: 'wide.png', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'wide.png' })
+  await expect.poll(() => dialog.locator('img').evaluate((image) => image.naturalWidth)).toBe(5000)
+  await dialog.getByRole('button', { name: '下载', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => window.__nativeCalls.filter((call) => call.action === 'saveEnd').length)).toBe(1)
+  const saved = async () => Buffer.concat((await page.evaluate(() => window.__nativeChunks)).map((chunk) => Buffer.from(chunk, 'base64')))
+  expect(await saved()).toEqual(wide)
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await openData(page)
+  await page.getByRole('button', { name: '下载', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => window.__nativeCalls.filter((call) => call.action === 'saveEnd').length)).toBe(2)
+  const zip = await saved()
+  const entries = Object.entries(unzipSync(zip))
+  for (const [name, bytes] of [['wide.png', wide], ['tall.png', tall], ['edge.png', edge]]) {
+    const packed = entries.find(([path]) => path.endsWith(`_${name}`))
+    expect(Buffer.from(packed[1])).toEqual(bytes)
+  }
+  // Importing the same ZIP replaces local records; its file IDs must not match stale in-memory uploads.
+  await page.locator('input[type=file][accept*=".zip"]').setInputFiles({ name: 'roundtrip.zip', mimeType: 'application/zip', buffer: zip })
+  await page.getByRole('button', { name: '确认导入', exact: true }).click()
+  await page.getByRole('button', { name: '查看导入的对话', exact: true }).click()
+  await send(page, '追问备份恢复后的图片')
+  await expect.poll(() => requests.length).toBe(2)
+  expect(uploads).toHaveLength(7)
+  expect(fileIds(requests[1]).sort()).toEqual(uploads.slice(4).map((file) => file.id).sort())
+})
+
+test('an undecodable new attachment keeps its original upload and is not marked checked', async ({ page }) => {
+  await setup(page)
+  const requests = await mockChat(page)
+  const uploads = await mockFileUploads(page)
+  await page.goto('/')
+  await expect(page.getByPlaceholder('请输入消息')).toBeVisible()
+  const bytes = Buffer.from('synthetic unsupported encoding')
+  await page.locator('input[type=file][multiple]').setInputFiles({ name: 'opaque.tiff', mimeType: 'image/tiff', buffer: bytes })
+  await send(page, '检查无法解码的附件')
+  await expect(page.getByText('这是模拟接口的回答。', { exact: true })).toBeVisible()
+  expect(uploads).toHaveLength(1)
+  expect(uploads[0]).toMatchObject({ name: 'opaque.tiff', mime: 'image/tiff', purpose: null, bytes })
+  expect(fileIds(requests[0])).toEqual([uploads[0].id])
+  await expect.poll(() => page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const open = indexedDB.open('chat-demo')
+      open.onsuccess = () => resolve(open.result)
+      open.onerror = () => reject(open.error)
+    })
+    try {
+      return await new Promise((resolve, reject) => {
+        const read = db.transaction('sessions').objectStore('sessions').getAll()
+        read.onsuccess = () => {
+          const file = read.result[0]?.messages[0]?.files[0]
+          resolve(file?.serverId ? [file.serverId, file.imageSizeCheckedFor ?? null] : null)
+        }
+        read.onerror = () => reject(read.error)
+      })
+    } finally { db.close() }
+  })).toEqual([uploads[0].id, null])
+})
+
+test('history only replaces confirmed oversized IDs and keeps new IDs after reload', async ({ page }) => {
+  await setup(page)
+  const requests = await mockChat(page)
+  const uploads = await mockFileUploads(page)
+  await page.goto('/')
+  await expect(page.getByPlaceholder('请输入消息')).toBeVisible()
+  await legacyImageHistory(page)
+  await send(page, '检查旧附件')
+  await expect.poll(() => requests.length).toBe(1)
+  expect(uploads).toHaveLength(1)
+  expect(uploads[0].name).toBe('wide.png')
+  expect(pngDimensions(uploads[0].bytes)).toEqual([4096, 205])
+  const expected = [uploads[0].id, 'file-old-edge', 'file-old-missing', 'file-old-undecodable', 'file-checked-copy']
+  expect(fileIds(requests[0])).toEqual(expected)
+  await expect.poll(async () => (await savedLegacyFiles(page)).map((file) => file.imageSizeCheckedFor)).toEqual([
+    uploads[0].id, 'file-old-edge', undefined, undefined, 'file-checked-copy',
+  ])
+  await expect(page.getByText('这是模拟接口的回答。', { exact: true })).toBeVisible()
+  await reopenLegacyImages(page)
+  await send(page, '刷新后复用')
+  await expect.poll(() => requests.length).toBe(2)
+  expect(uploads).toHaveLength(1)
+  expect(fileIds(requests[1])).toEqual(expected)
+})
+
+test('regenerating an old question replaces its oversized image before sending', async ({ page }) => {
+  await setup(page)
+  const requests = await mockChat(page)
+  const uploads = await mockFileUploads(page)
+  await page.goto('/')
+  await expect(page.getByPlaceholder('请输入消息')).toBeVisible()
+  await legacyImageHistory(page)
+  await page.getByText('先前的回复', { exact: true }).hover()
+  await page.getByRole('button', { name: '重新生成', exact: true }).first().click()
+  await expect.poll(() => requests.length).toBe(1)
+  expect(uploads).toHaveLength(1)
+  expect(uploads[0].name).toBe('wide.png')
+  expect(fileIds(requests[0])).toEqual([uploads[0].id, 'file-old-edge', 'file-old-missing', 'file-old-undecodable', 'file-checked-copy'])
+})
+
+test('stopping legacy image inspection does not discard its ID or send a request', async ({ page }) => {
+  await setup(page)
+  const requests = await mockChat(page)
+  const uploads = await mockFileUploads(page)
+  await page.goto('/')
+  await expect(page.getByPlaceholder('请输入消息')).toBeVisible()
+  await legacyImageHistory(page)
+  await page.evaluate(() => {
+    const decode = HTMLImageElement.prototype.decode
+    HTMLImageElement.prototype.decode = async function () {
+      await decode.call(this)
+      await new Promise((done) => {
+        window.__finishLegacyDecode = () => {
+          HTMLImageElement.prototype.decode = decode
+          done()
+        }
+      })
+    }
+  })
+  await send(page, '准备中取消')
+  await expect.poll(() => page.evaluate(() => Boolean(window.__finishLegacyDecode))).toBe(true)
+  await page.getByRole('button', { name: '停止生成', exact: true }).click()
+  await expect(page.getByRole('button', { name: '停止生成', exact: true })).toHaveCount(0)
+  await page.evaluate(() => window.__finishLegacyDecode())
+  expect((await savedLegacyFiles(page))[0].serverId).toBe('file-old-wide')
+  expect(requests).toHaveLength(0)
+  expect(uploads).toHaveLength(0)
+  await send(page, '取消后再发')
+  await expect.poll(() => requests.length).toBe(1)
+  expect(uploads).toHaveLength(1)
+  expect(fileIds(requests[0])[0]).toBe(uploads[0].id)
+})
+
 test('simulated PCM capture encodes WAV for ASR and cancels the stream on background', async ({ page }) => {
   await setup(page)
   await page.addInitScript(() => {

@@ -1,4 +1,5 @@
 import { translate, type TranslationMessage } from '../../i18n/index.js'
+import { resizeUploadImage } from '../../utils/resizeUploadImage.js'
 import { readMessageEvent } from './parseEvent.js'
 import { readServerSentEvents } from './sse.js'
 import { diagnostic, diagnosticError } from '../diagnostics.js'
@@ -127,19 +128,22 @@ export const uploadFile = async (
   file: File,
   purpose: FilePurpose | null,
   signal?: AbortSignal
-): Promise<FileObject> => {
+): Promise<FileObject & { imageSizeChecked: boolean }> => {
   const form = new FormData()
   if (purpose) {
     form.append('purpose', purpose)
   }
-  form.append('file', file)
+  // 无法确认尺寸时保留既有上传兼容性，让服务端判断原始格式。
+  const checkedImage = purpose === null ? await resizeUploadImage(file, signal) : null
+  form.append('file', checkedImage ?? file)
+  signal?.throwIfAborted()
   const response = await request(`${ANTHROPIC_BASE_URL}/files`, {
     method: 'POST',
     headers: anthropicHeaders(apiKey, true),
     body: form,
     signal,
   })
-  return (await response.json()) as FileObject
+  return { ...((await response.json()) as FileObject), imageSizeChecked: checkedImage !== null }
 }
 
 /** DELETE /anthropic/v1/files/{file_id} */
