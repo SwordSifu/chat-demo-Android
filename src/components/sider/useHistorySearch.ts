@@ -72,6 +72,11 @@ export const useHistorySearch = (mobile: boolean) => {
         ? useMobileSider.subscribe((state) => {
             if (!state.open) {
               cancel()
+            } else {
+              // The drawer may reopen before its exit animation unmounts the search UI.
+              clearResults()
+              setInput('')
+              setComposing(false)
             }
           })
         : useSettings.subscribe((state) => {
@@ -79,7 +84,7 @@ export const useHistorySearch = (mobile: boolean) => {
               cancel()
             }
           }),
-    [cancel, mobile]
+    [cancel, clearResults, mobile]
   )
 
   useLayoutEffect(
@@ -139,7 +144,8 @@ export const useHistorySearch = (mobile: boolean) => {
   }, [])
 
   useLayoutEffect(() => {
-    if (!query || !ready || importing || composing || getState().importingHistory) {
+    if (!query || !ready || importing || composing || getState().importingHistory ||
+        (mobile && !useMobileSider.getState().open)) {
       return
     }
     const job: Job = {
@@ -153,7 +159,7 @@ export const useHistorySearch = (mobile: boolean) => {
     jobRef.current = job
     job.timer = setTimeout(() => void loadPage(job, 0), HISTORY_SEARCH_DEBOUNCE_MS)
     return cancel
-  }, [cancel, composing, importing, loadPage, query, ready, revision])
+  }, [cancel, composing, importing, loadPage, mobile, query, ready, revision])
 
   return {
     input,

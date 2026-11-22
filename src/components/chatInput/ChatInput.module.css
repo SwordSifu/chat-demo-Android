@@ -12,6 +12,10 @@
   border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
   background: var(--dsw-specific-input-major);
   overflow: hidden;
+
+  &:focus-within {
+    border-color: var(--dsw-alias-border-l2);
+  }
 }
 
 .session {

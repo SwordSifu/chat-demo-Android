@@ -2,6 +2,13 @@
 
 日期：2026-11-18（Asia/Hong_Kong）。上游基线 `5d5dd754ebc1948e977ddb880a9eb5aa25f37b4c`。1.0.6 基于 `android-lite` 上的 1.0.5 预发布；发布分支为 `android-lite`，不改 `main`。对应附件见 [v1.0.6 预发布](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.6)。
 
+## 1.0.10：移动端动效与边栏手势（2026-11-22）
+
+- 基于 `android-lite` 的 `7ddc701`；类型检查、静态检查和生产前端构建通过。JS 单测 **73/73**；Windows Edge 回归 **64 项通过**，3 项可选导入性能基准未运行。Android JVM 离线重跑 **44/44**。
+- 新增 5 项 Chromium 触屏模拟：检查拖动位移与遮罩透明度、滑动开关、短滑/斜向/双指/取消不误触、历史列表继续滚动、输入框手势不中断、滑过行不选中、弹窗层级、返回键及减少动态效果偏好。Android 桥使用模拟数据，未请求真实模型。
+- release APK **2,236,468 字节**，SHA-256 `dea89d7de0c5bc20b6060d85aabbb82bb63362164e9a9dd5c4575fd60b487287`。离线构建、Release Lint Vital、116 个资源逐字节核对、ZIP 对齐及 APK v2 验签通过。包名 `io.github.swordsifu.dsapichat`，versionCode 11，minSdk 26，targetSdk 35，不可调试；证书与 v1.0.9 一致，SHA-256 `53b689437132de29ccf69b1aecd928bc635dee47368c36e13ddd8204a3207fd7`。
+- `adb devices -l` 没有连接设备；系统返回手势争用、屏幕键盘和旧版 WebView 上的动画手感仍待真机验证。不修改原生权限、数据库或 ZIP 格式。
+
 ## 1.0.9：同步上游 0.1.3，修复超大图片上传
 
 `main` 快进到上游 [`8ad7b56`](https://github.com/deepseek-ai/chat-demo/commit/8ad7b56e196b87d8a3215dc09476d6d146ad3f0e)；`android-lite` 基于 v1.0.8（`ac5c66d`）选择性移植大图修复，不覆盖 Android 适配。

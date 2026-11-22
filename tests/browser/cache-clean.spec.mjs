@@ -5,7 +5,7 @@ const settings = (page) => page.getByRole('dialog', { name: '设置', exact: tru
 const confirmation = (page) => page.getByRole('dialog', { name: '确认清除缓存？', exact: true })
 const cacheButton = (dialog) => dialog.getByRole('button', { name: '清除缓存', exact: true })
 const importConfirmation = (page) => page.getByRole('dialog', { name: '确认导入历史对话？', exact: true })
-const appResult = '应用内存：已释放 1 个对话的缓存详情。'
+const appResult = '已清除应用内存中 1 个对话的缓存。'
 const nativeSuccess = '已清除 Android WebView 资源缓存。'
 const nativeFailure = '无法清除 Android WebView 资源缓存，请重试。'
 
@@ -179,8 +179,8 @@ test('clear cache in browser evicts only inactive app memory and preserves persi
 
   await cacheButton(settings(page)).click()
   const dialog = confirmation(page)
-  await expect(dialog).toContainText('只释放应用内存中非活跃对话的缓存详情。')
-  await expect(dialog).toContainText('对话、附件、草稿、API Key、偏好设置、Token 用量和诊断日志均会保留。')
+  await expect(dialog).toContainText('只清除应用内存中非活跃对话的缓存。')
+  await expect(dialog).toContainText('保留对话、附件、草稿、API Key、偏好设置、Token 用量和诊断日志。')
   await expect(dialog).toContainText('不会修改 IndexedDB、导入暂存区或浏览器数据。')
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   await expect(dialog).toHaveCount(0)

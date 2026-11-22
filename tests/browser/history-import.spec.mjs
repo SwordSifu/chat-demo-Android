@@ -216,7 +216,7 @@ test('history import shows actual progress, saves without cancellation, then ope
   await page.evaluate(() => { window.__failHistoryDetail = 'bench-0' })
   await viewImported(page).click()
   await expect(settings(page)).toHaveCount(0)
-  await expect(page.getByText('对话加载失败，请重试', { exact: true })).toBeVisible()
+  await expect(page.getByText('无法加载此对话，请重试。', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '重试', exact: true }).click()
   await expect(page.getByText('合成回答 0-0', { exact: true })).toBeVisible()
   await expectOriginalImage(page)
@@ -257,9 +257,9 @@ test('cancelling after staging restores the previous chats and image without com
 
 for (const { name, quota, fixture, result } of [
   { name: 'malformed archive index', quota: false, fixture: { badIndex: true },
-    result: '导入失败：文件内容不完整，无法导入' },
+    result: '导入失败：文件内容不完整' },
   { name: 'storage quota during commit', quota: true, fixture: { count: 3, turns: 2 },
-    result: '存储空间不足，原有对话未更改。请释放一些空间后重试。' },
+    result: '存储空间不足，原有对话未更改。请腾出空间后重试。' },
 ]) {
   test(`${name} shows a safe localized error and retains live data`, async ({ page }) => {
     const original = await seedOriginal(page)

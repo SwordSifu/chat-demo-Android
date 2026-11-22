@@ -21,7 +21,7 @@ import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { openSettings } from '../settings/settingsDialogState.js'
-import { closeMobileSider, useMobileSider } from './mobileSiderState.js'
+import { closeMobileSider } from './mobileSiderState.js'
 import { SessionItem } from './SessionItem.js'
 import { useHistorySearch } from './useHistorySearch.js'
 import styles from './Sider.module.css'
@@ -82,8 +82,8 @@ export const Sider = ({
       <div className={styles.top}>
         <div className={styles.appName}>{t('appName')}</div>
         <IconButton
-          size="m"
-          icon={<IconPanelLeftOutline16 />}
+          size={mobile ? 'xl' : 'm'}
+          icon={mobile ? <IconCloseOutline16 /> : <IconPanelLeftOutline16 />}
           tooltip={t('collapseSiderbarButton')}
           tooltipPlacement="bottom"
           onClick={() => (mobile ? closeMobileSider() : setSiderCollapsed(true))}
@@ -273,21 +273,5 @@ export const Sider = ({
         </Modal>
       ) : null}
     </div>
-  )
-}
-
-/** 移动端抽屉：浮在页面上方，点空白区域关闭。 */
-export const MobileSider = ({ onSearchResult }: { onSearchResult: OpenSearchResult }) => {
-  const open = useMobileSider((state) => state.open)
-  if (!open) {
-    return null
-  }
-  return (
-    <>
-      <div className={styles.drawerMask} onClick={closeMobileSider} />
-      <div className={styles.drawer}>
-        <Sider mobile onSearchResult={onSearchResult} />
-      </div>
-    </>
   )
 }

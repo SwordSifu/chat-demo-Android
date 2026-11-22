@@ -11,7 +11,7 @@ const subscribe = (onChange: () => void) => {
 export const useIsMobile = () => useSyncExternalStore(subscribe, () => query.matches)
 
 const preventPageScroll = (event: TouchEvent) => {
-  if (event.touches.length !== 1) {
+  if (event.defaultPrevented || event.touches.length !== 1) {
     return
   }
   for (

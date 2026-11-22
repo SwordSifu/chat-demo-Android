@@ -2,15 +2,19 @@ import { IconMenuOutline20, IconNewChatOutline20 } from '../base/icons.js'
 import { useTranslate } from '../../i18n/index.js'
 import { newChat } from '../../services/chat/store.js'
 import { IconButton } from '../base/IconButton.js'
-import { openMobileSider } from '../sider/mobileSiderState.js'
+import { MOBILE_SIDER_ID, MOBILE_SIDER_TRIGGER, openMobileSider, useMobileSider } from '../sider/mobileSiderState.js'
 import styles from './MobileHeader.module.css'
 
 /** 移动端顶栏：左侧菜单打开侧边栏；会话页再显示标题与开启新对话 */
 export const MobileHeader = ({ title }: { title?: string }) => {
   const t = useTranslate()
+  const siderOpen = useMobileSider((state) => state.open)
   return (
     <div className={styles.header}>
       <IconButton
+        id={MOBILE_SIDER_TRIGGER}
+        aria-expanded={siderOpen}
+        aria-controls={MOBILE_SIDER_ID}
         size="xl"
         tone="primary"
         icon={<IconMenuOutline20 />}

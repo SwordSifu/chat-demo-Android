@@ -7,7 +7,6 @@
   align-items: center;
   justify-content: center;
   background-color: rgba(0, 0, 0, var(--overlay-opacity));
-  backdrop-filter: blur(2px);
 
   [data-ds-dark-theme] & {
     --overlay-opacity: 0.6;
@@ -31,6 +30,24 @@
     0 0 1px 0 rgba(0, 0, 0, 0.2),
     0 0 4px 0 rgba(0, 0, 0, 0.02),
     0 12px 32px 0 rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .overlay {
+    animation: overlayIn 150ms ease-out both;
+  }
+
+  .content {
+    animation: dialogIn 190ms cubic-bezier(0.22, 0.68, 0.25, 1) both;
+  }
+}
+
+@keyframes overlayIn {
+  from { opacity: 0; }
+}
+
+@keyframes dialogIn {
+  from { transform: translateY(6px) scale(0.99); }
 }
 
 .header {

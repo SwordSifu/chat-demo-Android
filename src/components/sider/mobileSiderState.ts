@@ -1,8 +1,14 @@
 import { create } from 'zustand'
 
-/** 移动端侧边栏抽屉：顶栏菜单按钮打开，点遮罩、切换会话或开启新对话后关闭 */
+export const MOBILE_SIDER_ID = 'mobile-sider'
+export const MOBILE_SIDER_TRIGGER = 'mobile-sider-trigger'
+
+export const hasSiderBlockingOverlay = () => Boolean(document.querySelector(
+  `[aria-modal="true"]:not(#${MOBILE_SIDER_ID}), [role="menu"]`
+))
 export const useMobileSider = create(() => ({ open: false }))
 
-export const openMobileSider = () => useMobileSider.setState({ open: true })
+const setOpen = (open: boolean) => useMobileSider.setState((state) => state.open === open ? state : { open })
 
-export const closeMobileSider = () => useMobileSider.setState({ open: false })
+export const openMobileSider = () => setOpen(true)
+export const closeMobileSider = () => setOpen(false)

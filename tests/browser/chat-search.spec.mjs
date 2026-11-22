@@ -6,7 +6,7 @@ const settings = (page) => page.getByRole('dialog', { name: '设置', exact: tru
 const input = (page) => page.getByRole('searchbox', { name: '搜索本机对话', exact: true })
 const results = (page) => page.getByRole('list', { name: '对话搜索结果', exact: true })
 const rows = (page) => results(page).getByRole('listitem')
-const noMatches = (page) => page.getByText('没有找到匹配的对话', { exact: true })
+const noMatches = (page) => page.getByText('未找到匹配的对话', { exact: true })
 
 async function showSidebar(page) {
   const open = page.getByRole('button', { name: '打开边栏', exact: true })
@@ -193,7 +193,7 @@ for (const [layout, width] of [['mobile', 393], ['desktop', 1200]]) {
     await page.evaluate(() => window.__blockSearchReads())
     await rows(page).getByRole('button').click()
     await expect.poll(() => sessionReads(page)).toEqual(['bench-1'])
-    await expect(page.getByText('正在加载对话...', { exact: true })).toBeVisible()
+    await expect(page.getByText('正在加载对话…', { exact: true })).toBeVisible()
     await expect(fromMessage(2, page)).toHaveCount(0)
     await releaseReads(page)
     await expect(fromMessage(2, page)).toHaveText(/合成定位正文/)
@@ -278,7 +278,7 @@ test('a match moved off the selected branch opens the chat without switching bra
   await rows(page).getByRole('button').click()
   await expect(fromMessage(3, page)).toContainText('替代回答')
   await expect(fromMessage(2, page)).toHaveCount(0)
-  await expect(page.getByText('匹配的消息已不在当前分支，未进行定位。', { exact: true })).toBeVisible()
+  await expect(page.getByText('匹配的消息不在当前分支，无法跳转。', { exact: true })).toBeVisible()
 })
 
 test('read failures do not claim no matches, and a failed jump is not replayed when loading is retried', async ({ page }) => {
@@ -293,7 +293,7 @@ test('read failures do not claim no matches, and a failed jump is not replayed w
   await expect(rows(page)).toHaveCount(1)
   await page.evaluate(() => { window.__searchProbe.fail = 'bench-0' })
   await rows(page).getByRole('button').click()
-  await expect(page.getByText('对话加载失败，请重试', { exact: true })).toBeVisible()
+  await expect(page.getByText('无法加载此对话，请重试。', { exact: true })).toBeVisible()
   await page.evaluate(() => { window.__searchProbe.fail = null })
   await page.locator('main').getByRole('button', { name: '重试', exact: true }).click()
   await expect(fromMessage(20, page)).toBeInViewport()
