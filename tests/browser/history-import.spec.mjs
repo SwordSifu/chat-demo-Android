@@ -4,7 +4,7 @@ import { historyFixture, pickHistoryFixture } from './history-fixture.mjs'
 
 const settings = (page) => page.getByRole('dialog', { name: '设置', exact: true })
 const confirmation = (page) => page.getByRole('dialog', { name: '确认导入历史对话？', exact: true })
-const progress = (page) => page.getByRole('dialog', { name: '导入历史对话', exact: true })
+const progress = (page) => settings(page).getByRole('group', { name: '导入历史对话', exact: true })
 const viewImported = (page) => settings(page).getByRole('button', { name: '查看导入的对话', exact: true })
 
 async function showSidebar(page) {
@@ -50,10 +50,9 @@ function installImportProbe() {
     if (this.name !== 'bench.zip' || !state?.pauseReading) return blob
     const arrayBuffer = blob.arrayBuffer.bind(blob)
     blob.arrayBuffer = async () => {
-      const phase = !state.checking ? 'checking' : !state.reading && state.staged > 0 ? 'reading' : null
-      if (phase) {
-        state[phase] = true
-        await new Promise((resolve) => { state.release[phase] = resolve })
+      if (!state.checking) {
+        state.checking = true
+        await new Promise((resolve) => { state.release.checking = resolve })
       }
       return arrayBuffer()
     }
@@ -62,16 +61,24 @@ function installImportProbe() {
   IDBDatabase.prototype.transaction = function (names, mode, ...args) {
     const state = window.__importObserved
     const stores = typeof names === 'string' ? [names] : names
-    if (state && mode === 'readwrite' && stores.includes('sessionsStaging') && stores.includes('sessionSummaries')) {
-      state.commits++
-      if (state.pauseSaving) {
-        // An overlapping transaction holds the real commit until the test releases it.
-        const blocker = Reflect.apply(transaction, this, ['sessions', 'readwrite'])
-        const store = blocker.objectStore('sessions')
+    if (state && mode === 'readwrite') {
+      // Hold a real transaction after a batch has been staged. Do not depend on
+      // a later File.slice: a read-ahead window can cover the whole archive.
+      const hold = (phase, name) => {
+        const blocker = Reflect.apply(transaction, this, [name, 'readwrite'])
+        const store = blocker.objectStore(name)
         let released = false
-        state.release.saving = () => { released = true }
+        state.release[phase] = () => { released = true }
         const keepAlive = () => { if (!released) store.count().onsuccess = keepAlive }
         keepAlive()
+      }
+      if (state.pauseReading && !state.reading && state.staged && stores.length === 1 && stores[0] === 'sessionsStaging') {
+        state.reading = true
+        hold('reading', 'sessionsStaging')
+      }
+      if (stores.includes('sessionsStaging') && stores.includes('sessionSummaries')) {
+        state.commits++
+        if (state.pauseSaving) hold('saving', 'sessions')
       }
     }
     return Reflect.apply(transaction, this, [names, mode, ...args])
@@ -191,26 +198,41 @@ test('history import shows actual progress, saves without cancellation, then ope
   await expect(progress(page).getByText('正在检查文件…', { exact: true })).toBeVisible()
   await expect(progress(page).getByRole('progressbar')).not.toHaveAttribute('value')
   await expect(progress(page).getByRole('button', { name: '取消导入', exact: true })).toHaveCount(1)
-  await expect(settings(page).getByRole('button', { name: '上传', exact: true })).toBeDisabled()
+  // Close during preflight, before the chat store's replacement guard takes effect.
   await expect.poll(() => page.evaluate(() => window.__importObserved.checking)).toBe(true)
+  await settings(page).getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(settings(page)).toHaveCount(0)
+  await openDataSettings(page)
+  await expect(progress(page).getByText('正在检查文件…', { exact: true })).toBeVisible()
+  const busyButton = settings(page).getByRole('button', { name: '导入历史对话', exact: true })
+  await expect(busyButton).toBeDisabled()
+  await expect(busyButton).toHaveAttribute('aria-busy', 'true')
+  await expect(busyButton.locator('svg')).toBeVisible()
+  // Even a delayed file-picker response cannot queue a second import.
+  await pickHistoryFixture(page, historyFixture({ count: 1 }))
+  await expect(confirmation(page)).toHaveCount(0)
   await release(page, 'checking')
 
   await expect.poll(() => page.evaluate(() => window.__importObserved.reading)).toBe(true)
   const bar = progress(page).getByRole('progressbar')
-  // The manifest and first staged session were consumed. A throttled progress update
-  // may still show the manifest alone, but cannot count any later ZIP entry yet.
-  await expect(progress(page).getByText(/^正在读取：[12] \/ 5 个条目$/)).toBeVisible()
-  await expect(bar).toHaveAttribute('value', /^[12]$/)
+  // Both real totals are visible. The last published snapshot may be throttled;
+  // completion cannot be reported while the transaction is still blocked.
+  await expect(progress(page).getByText(/^正在读取：[1-4] \/ 5 个条目$/)).toBeVisible()
+  await expect(progress(page).getByText(/^已处理 [0-2] \/ 2 个对话$/)).toBeVisible()
+  await expect(bar).toHaveAttribute('value', /^[1-4]$/)
   await expect(bar).toHaveAttribute('max', '5')
   await release(page, 'reading')
 
   await expect(progress(page).getByText('正在保存，请勿关闭应用…', { exact: true })).toBeVisible()
   await expect(progress(page).getByRole('button', { name: '取消导入', exact: true })).toHaveCount(0)
   await page.keyboard.press('Escape')
-  await expect(progress(page)).toBeVisible()
+  await expect(settings(page)).toHaveCount(0)
   await expect.poll(() => page.evaluate(() => window.__importObserved.commits)).toBe(1)
   await release(page, 'saving')
+  await expect.poll(async () => (await historyStorage(page)).sessions.length).toBe(2)
+  await openDataSettings(page)
   await expect(settings(page).getByText('已导入 2 个对话', { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => window.__importObserved.commits)).toBe(1)
 
   // The shortcut follows the ordinary detail path (including retry), not a copied preview.
   await page.evaluate(() => { window.__failHistoryDetail = 'bench-0' })
@@ -234,7 +256,7 @@ test('history import shows actual progress, saves without cancellation, then ope
 test('cancelling after staging restores the previous chats and image without committing', async ({ page }) => {
   const original = await seedOriginal(page)
   await observeImport(page, { pauseReading: true })
-  await confirmImport(page, { count: 3, turns: 2 })
+  await confirmImport(page, { count: 33, turns: 2 })
   await expect.poll(() => page.evaluate(() => window.__importObserved.checking)).toBe(true)
   await release(page, 'checking')
   await expect.poll(() => page.evaluate(() => window.__importObserved.reading)).toBe(true)

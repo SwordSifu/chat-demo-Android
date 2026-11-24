@@ -31,6 +31,9 @@ declare const styles: {
   readonly "mobileConfirm": string;
   readonly "importConfirm": string;
   readonly "importConfirmText": string;
+  readonly "importing": string;
+  readonly "importProgress": string;
+  readonly "importViewButton": string;
   readonly "deleteConfirm": string;
   readonly "deleteActions": string;
 };

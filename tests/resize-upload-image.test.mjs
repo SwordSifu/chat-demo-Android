@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict'
+import { registerHooks } from 'node:module'
 import { test } from 'node:test'
-import { isUploadImageOversized, resizeUploadImage } from '../src/utils/resizeUploadImage.ts'
+import { getAbortReason, throwIfAborted } from '../src/utils/abort.ts'
+
+const moduleUrl = new URL('../src/utils/resizeUploadImage.ts', import.meta.url).href
+const hook = registerHooks({
+  resolve(specifier, context, next) {
+    return next(specifier === './abort.js' && context.parentURL === moduleUrl
+      ? new URL('./abort.ts', moduleUrl).href
+      : specifier, context)
+  },
+})
+const { isUploadImageOversized, resizeUploadImage } = await import(moduleUrl).finally(() => hook.deregister())
 
 function browser(t, { width, height, decode, encode } = {}) {
   const state = { revoked: [], draws: [], removed: false }
@@ -34,6 +45,15 @@ function browser(t, { width, height, decode, encode } = {}) {
 globalThis.Image = function () {}
 globalThis.document = { createElement() {} }
 const original = new File(['original'], 'camera.webp', { type: 'image/webp', lastModified: 1234 })
+
+test('legacy AbortSignal falls back to AbortError and modern reasons are preserved', () => {
+  assert.doesNotThrow(() => throwIfAborted({ aborted: false }))
+  assert.throws(() => throwIfAborted({ aborted: true }), { name: 'AbortError' })
+  const reason = new Error('custom cancellation')
+  const signal = AbortSignal.abort(reason)
+  assert.equal(getAbortReason(signal), reason)
+  assert.throws(() => throwIfAborted(signal), (error) => error === reason)
+})
 
 test('4096 pixels is inclusive; passing the check alone does not encode', async (t) => {
   const state = browser(t, { width: 54, height: 4096 })

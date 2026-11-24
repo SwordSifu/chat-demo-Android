@@ -8,6 +8,8 @@ async function setup(page, options = {}) {
     if (oldEngine) {
       delete Array.prototype.toReversed
       delete Array.prototype.toSorted
+      delete AbortSignal.prototype.throwIfAborted
+      delete AbortSignal.prototype.reason
     }
     window.__nativeCalls = []
     window.__nativeChunks = []
@@ -947,8 +949,8 @@ test('regenerating an old question replaces its oversized image before sending',
   expect(fileIds(requests[0])).toEqual([uploads[0].id, 'file-old-edge', 'file-old-missing', 'file-old-undecodable', 'file-checked-copy'])
 })
 
-test('stopping legacy image inspection does not discard its ID or send a request', async ({ page }) => {
-  await setup(page)
+test('stopping legacy image inspection without new AbortSignal APIs does not send a request or discard its ID', async ({ page }) => {
+  await setup(page, { oldEngine: true })
   const requests = await mockChat(page)
   const uploads = await mockFileUploads(page)
   await page.goto('/')

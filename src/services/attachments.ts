@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { LinkedMessage, TranslationMessage } from '../i18n/index.js'
+import { getAbortReason, throwIfAborted } from '../utils/abort.js'
 import { uploadFile } from './api/client.js'
 import { classifyApiError, getUploadErrorInfo, isRetryableApiError } from './api/errors.js'
 import type { FilePurpose } from './api/types.js'
@@ -127,7 +128,7 @@ const enqueueUpload = (
   new Promise<UploadedAttachment>((resolve, reject) => {
     queue.push(async () => {
       if (signal.aborted) {
-        reject(signal.reason)
+        reject(getAbortReason(signal))
         return
       }
       try {
@@ -181,7 +182,7 @@ export const uploadAttachment = (
   setTask(id, { status: 'uploading' })
   const promise = enqueueUpload(apiKey, blob, name, isImage, controller.signal)
     .then((uploaded) => {
-      controller.signal.throwIfAborted()
+      throwIfAborted(controller.signal)
       setTask(id, { status: 'done', ...uploaded })
       return uploaded
     })

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { isAndroid } from '../../platform/android.js'
+import { getAbortReason, throwIfAborted } from '../../utils/abort.js'
 import { createId } from '../../utils/id.js'
 import { isUploadImageOversized } from '../../utils/resizeUploadImage.js'
 import { captureUsageGeneration, parseChatTokenUsage, recordChatUsage, type ChatTokenUsage } from '../account/usage.js'
@@ -407,7 +408,7 @@ export const replaceHistory = async (
   write: () => Promise<void>,
   { signal, onCommit }: { signal?: AbortSignal; onCommit?: () => void } = {}
 ): Promise<{ count: number; latestId: string | null }> => {
-  signal?.throwIfAborted()
+  throwIfAborted(signal)
   if (get().importingHistory) {
     throw new Error('History replacement is already in progress')
   }
@@ -418,18 +419,18 @@ export const replaceHistory = async (
     }
     // 已开始的单条删除先同步到内存，避免本次替换失败后列表残留已被删除的记录。
     await Promise.all(deletionTasks)
-    signal?.throwIfAborted()
+    throwIfAborted(signal)
     historyEpoch += 1
     initTask = undefined
     sessionLoads.clear()
     await waitForIdle()
-    signal?.throwIfAborted()
+    throwIfAborted(signal)
     await db.clearStaging()
     let summaries: SessionSummary[]
     try {
-      signal?.throwIfAborted()
+      throwIfAborted(signal)
       await write()
-      signal?.throwIfAborted()
+      throwIfAborted(signal)
       // 从这里起事务不可由界面取消；失败仍会由 IndexedDB 回滚。
       onCommit?.()
       summaries = await db.commitStaging()
@@ -835,7 +836,7 @@ const checkLegacyImageIds = async (files: Iterable<FileAttachment>, signal: Abor
   }
   const checked = new Map<string, { ids: Set<string>; oversized: boolean }>()
   for (const [id, ids] of candidates) {
-    signal.throwIfAborted()
+    throwIfAborted(signal)
     try {
       const blob = await db.loadFile(id)
       if (blob) {
@@ -847,7 +848,7 @@ const checkLegacyImageIds = async (files: Iterable<FileAttachment>, signal: Abor
     } catch {
       // 本机读不到或不能解码时，不猜测尺寸，也不丢已有的服务端引用。
     }
-    signal.throwIfAborted()
+    throwIfAborted(signal)
   }
   return checked
 }
@@ -869,7 +870,7 @@ const ensureServerId = async (
     return task
   }
   const blob = await db.loadFile(file.id)
-  signal.throwIfAborted()
+  throwIfAborted(signal)
   if (!blob) {
     return null
   }
@@ -905,11 +906,11 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
   request = refreshRequest(sessionId, request)
   const apiKey = useSettings.getState().apiKey ?? ''
   const serverIds = new Map<string, UploadedAttachment>()
-  signal.throwIfAborted()
+  throwIfAborted(signal)
   // 停止生成立即生效；已经在途的上传任务可能共享，不随本轮生成取消。
   let onAbort: () => void = () => {}
   const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => reject(signal.reason)
+    onAbort = () => reject(getAbortReason(signal))
     signal.addEventListener('abort', onAbort, { once: true })
   })
   try {
@@ -918,7 +919,7 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
       checkLegacyImageIds([...request.question.files, ...contextFiles], signal),
       aborted,
     ])
-    signal.throwIfAborted()
+    throwIfAborted(signal)
     if (checked.size > 0) {
       for (const [id, result] of checked) {
         const task = useUploads.getState().tasks[id]
@@ -969,19 +970,19 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
       }
     }
     for (const file of pending.values()) {
-      signal.throwIfAborted()
+      throwIfAborted(signal)
       try {
         const uploaded = await Promise.race([ensureServerId(apiKey, file, signal), aborted])
-        signal.throwIfAborted()
+        throwIfAborted(signal)
         if (uploaded) {
           saveServerIds(sessionId, new Map([[file.id, uploaded]]))
         }
       } catch {
-        signal.throwIfAborted()
+        throwIfAborted(signal)
       }
     }
 
-    signal.throwIfAborted()
+    throwIfAborted(signal)
     return refreshRequest(sessionId, request)
   } finally {
     signal.removeEventListener('abort', onAbort)

@@ -1,4 +1,5 @@
 import { Inflate } from 'fflate'
+import { throwIfAborted } from '../../../utils/abort.js'
 
 const READ_CHUNK_BYTES = 256 * 1024
 // 控制每轮同步解压的工作量；输出交给调用方保存后才继续读取。
@@ -51,6 +52,48 @@ const readBytes = async (file: File, start: number, length: number) => {
   return bytes
 }
 
+type Read = (start: number, length: number) => Promise<Uint8Array<ArrayBuffer>>
+
+/** JSON 和附件可以相距很远。每个打开的归档只保留两个对齐窗口，不重读中央目录。 */
+const payloadReader = (file: File, limit: number, signal?: AbortSignal): Read => {
+  const windowSize = 512 * 1024
+  const windows = new Map<number, Uint8Array<ArrayBuffer>>()
+  const windowAt = async (start: number) => {
+    let block = windows.get(start)
+    if (!block) {
+      block = await readBytes(file, start, Math.min(windowSize, limit - start))
+      throwIfAborted(signal)
+    }
+    windows.delete(start)
+    windows.set(start, block)
+    if (windows.size > 2) {
+      const oldest = windows.keys().next()
+      if (!oldest.done) {
+        windows.delete(oldest.value)
+      }
+    }
+    return block
+  }
+  return async (start, length) => {
+    throwIfAborted(signal)
+    if (start < 0 || length < 0 || start + length > limit || length > windowSize) {
+      invalid()
+    }
+    if (!length) {
+      return new Uint8Array(0)
+    }
+    const base = start - (start % windowSize)
+    const head = (await windowAt(base)).subarray(start - base, start - base + length)
+    if (head.length === length) {
+      return head
+    }
+    const bytes = new Uint8Array(length)
+    bytes.set(head)
+    bytes.set((await windowAt(base + windowSize)).subarray(0, length - head.length), head.length)
+    return bytes
+  }
+}
+
 /** ZIP64、分卷与加密文件不属于导出格式，一律拒绝。 */
 const checkExtra = (bytes: Uint8Array) => {
   const view = viewOf(bytes)
@@ -66,12 +109,18 @@ const checkExtra = (bytes: Uint8Array) => {
   }
 }
 
+const pathDecoder = new TextDecoder('utf-8', { fatal: true })
 const decodePath = (bytes: Uint8Array, flags: number) => {
   // 非 UTF-8 编码的 ZIP 文件名仅接受 ASCII，确保附件路径解码准确。
   if (!(flags & 0x800) && bytes.some((byte) => byte > 0x7f)) {
     invalid()
   }
-  const path = new TextDecoder('utf-8', { fatal: true }).decode(bytes).normalize('NFC')
+  let path: string
+  try {
+    path = pathDecoder.decode(bytes).normalize('NFC')
+  } catch {
+    return invalid()
+  }
   if (!path || path.includes('\\') || path.includes('\0') || /^[A-Za-z]:/.test(path)) {
     invalid()
   }
@@ -97,7 +146,7 @@ const readDirectory = async (
   file: File,
   signal?: AbortSignal
 ): Promise<{ entries: Entry[]; offset: number }> => {
-  signal?.throwIfAborted()
+  throwIfAborted(signal)
   if (file.size < 22) {
     invalid()
   }
@@ -136,10 +185,17 @@ const readDirectory = async (
   let blockStart = 0
   const refill = async (start: number) => {
     block = await readBytes(file, offset + start, Math.min(READ_CHUNK_BYTES, size - start))
-    signal?.throwIfAborted()
+    throwIfAborted(signal)
     blockStart = start
   }
+  let lastYield = performance.now()
   for (let index = 0; index < count; index++) {
+    // 一个目录块可以含几千个小条目，预检时也允许页面接收取消事件。
+    if (index % 64 === 0 && performance.now() - lastYield >= 24) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      throwIfAborted(signal)
+      lastYield = performance.now()
+    }
     if (cursor + 46 > size) {
       invalid()
     }
@@ -205,11 +261,11 @@ const readDirectory = async (
   return { entries: entries.sort((a, b) => a.offset - b.offset), offset }
 }
 
-const readEntryOffset = async (file: File, entry: Entry, boundary: number) => {
+const readEntryOffset = async (read: Read, entry: Entry, boundary: number) => {
   if (entry.offset + 30 > boundary) {
     invalid()
   }
-  const view = viewOf(await readBytes(file, entry.offset, 30))
+  const view = viewOf(await read(entry.offset, 30))
   const nameLength = view.getUint16(26, true)
   const extraLength = view.getUint16(28, true)
   const start = entry.offset + 30 + nameLength + extraLength
@@ -233,16 +289,20 @@ const readEntryOffset = async (file: File, entry: Entry, boundary: number) => {
       invalid()
     }
   }
-  const metadata = await readBytes(file, entry.offset + 30, nameLength + extraLength)
+  const metadata = await read(entry.offset + 30, nameLength + extraLength)
   if (entry.name.some((byte, index) => byte !== metadata[index])) {
     invalid()
   }
   checkExtra(metadata.subarray(nameLength))
+  return start
+}
+
+const checkDescriptor = async (read: Read, entry: Entry, end: number, boundary: number) => {
   if (entry.flags & 8) {
     if (end + 12 > boundary) {
       invalid()
     }
-    const descriptor = viewOf(await readBytes(file, end, Math.min(16, boundary - end)))
+    const descriptor = viewOf(await read(end, Math.min(16, boundary - end)))
     const shift = descriptor.getUint32(0, true) === 0x08074b50 ? 4 : 0
     if (
       shift + 12 > descriptor.byteLength ||
@@ -253,34 +313,36 @@ const readEntryOffset = async (file: File, entry: Entry, boundary: number) => {
       invalid()
     }
   }
-  return start
 }
 
 export type ArchiveEntry = {
   path: string
   size: number
+  offset: number
   stream: AsyncIterable<Uint8Array>
 }
 
-/**
- * 按条目在文件中的物理顺序逐条、逐块解压，跳过目录条目。
- * 调用方必须消费完当前条目的数据，再请求下一个条目。
- */
+/** 按物理顺序枚举；正文（含本地文件头与描述符）可随所属会话读取一次。 */
 const readArchive = async function* (
   file: File,
   directory: Awaited<ReturnType<typeof readDirectory>>,
   signal?: AbortSignal
 ): AsyncGenerator<ArchiveEntry> {
-  for (const [index, entry] of directory.entries.entries()) {
-    signal?.throwIfAborted()
-    const boundary = directory.entries[index + 1]?.offset ?? directory.offset
-    const start = await readEntryOffset(file, entry, boundary)
-    signal?.throwIfAborted()
-    if (entry.path.endsWith('/')) {
-      continue
+  const read = payloadReader(file, directory.offset, signal)
+  // 命中窗口时 await 不一定让出事件循环；高压缩比附件也要允许 UI 取消。
+  let lastYield = performance.now()
+  const checkpoint = async () => {
+    if (performance.now() - lastYield >= 24) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      lastYield = performance.now()
     }
-    let completed = false
+    throwIfAborted(signal)
+  }
+  for (const [index, entry] of directory.entries.entries()) {
+    await checkpoint()
+    const boundary = directory.entries[index + 1]?.offset ?? directory.offset
     const stream = async function* (): AsyncGenerator<Uint8Array> {
+      const start = await readEntryOffset(read, entry, boundary)
       let written = 0
       let crc = 0xffffffff
       const pending: Uint8Array[] = []
@@ -298,12 +360,11 @@ const readArchive = async function* (
       }
       const inflate = entry.method === 8 ? new Inflate(append) : null
       for (let offset = 0; offset < entry.compressedSize; offset += READ_CHUNK_BYTES) {
-        const chunk = await readBytes(
-          file,
+        const chunk = await read(
           start + offset,
           Math.min(READ_CHUNK_BYTES, entry.compressedSize - offset)
         )
-        signal?.throwIfAborted()
+        await checkpoint()
         if (!inflate) {
           append(chunk)
           yield* pending.splice(0)
@@ -311,7 +372,7 @@ const readArchive = async function* (
         }
         for (let cursor = 0; cursor < chunk.length; cursor += INFLATE_CHUNK_BYTES) {
           const end = Math.min(cursor + INFLATE_CHUNK_BYTES, chunk.length)
-          signal?.throwIfAborted()
+          await checkpoint()
           pushInflate(inflate, chunk.subarray(cursor, end), offset + end === entry.compressedSize)
           // yield 暂停解压，等待调用方完成异步写入；不缓存整个条目。
           yield* pending.splice(0)
@@ -324,11 +385,14 @@ const readArchive = async function* (
       if (written !== entry.size || (crc ^ 0xffffffff) >>> 0 !== entry.crc) {
         invalid()
       }
-      completed = true
+      await checkDescriptor(read, entry, start + entry.compressedSize, boundary)
+      throwIfAborted(signal)
     }
-    yield { path: entry.path, size: entry.size, stream: stream() }
-    if (!completed) {
-      invalid()
+    const archiveEntry = { path: entry.path, size: entry.size, offset: entry.offset, stream: stream() }
+    if (entry.path.endsWith('/')) {
+      await skipEntry(archiveEntry)
+    } else {
+      yield archiveEntry
     }
   }
 }
@@ -338,17 +402,37 @@ export const openArchive = async (file: File, signal?: AbortSignal) => {
   const directory = await readDirectory(file, signal)
   return {
     total: directory.entries.reduce((count, entry) => count + Number(!entry.path.endsWith('/')), 0),
+    countEntries: (match: (path: string) => boolean) =>
+      directory.entries.reduce((count, entry) => count + Number(match(entry.path)), 0),
     entries: readArchive(file, directory, signal),
   }
 }
 
-/** 读出整个条目：会话 JSON 需要完整解析，图片需要识别类型后整张保存。 */
-export const readEntry = async (entry: ArchiveEntry): Promise<Blob> => {
+/** 分块组成附件 Blob；从同一数据流中截取前 16 字节识别 MIME。 */
+export const readEntry = async (
+  entry: ArchiveEntry,
+  detectType?: (prefix: Uint8Array) => string
+): Promise<Blob> => {
+  const prefix = new Uint8Array(detectType ? Math.min(entry.size, 16) : 0)
+  let copied = 0
   const parts: Blob[] = []
+  let chunks: Uint8Array<ArrayBuffer>[] = []
+  let buffered = 0
   for await (const chunk of entry.stream) {
-    parts.push(new Blob([chunk as Uint8Array<ArrayBuffer>]))
+    if (copied < prefix.length) {
+      const head = chunk.subarray(0, prefix.length - copied)
+      prefix.set(head, copied)
+      copied += head.length
+    }
+    chunks.push(chunk as Uint8Array<ArrayBuffer>)
+    buffered += chunk.length
+    if (buffered >= READ_CHUNK_BYTES) {
+      parts.push(new Blob(chunks))
+      chunks = []
+      buffered = 0
+    }
   }
-  return new Blob(parts)
+  return new Blob([...parts, ...chunks], { type: detectType?.(prefix) })
 }
 
 /** 不需要的条目也要读完，以校验大小与 CRC。 */

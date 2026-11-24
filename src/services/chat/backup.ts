@@ -1,3 +1,4 @@
+import { throwIfAborted } from '../../utils/abort.js'
 import { formatDate } from '../../utils/format.js'
 import * as db from './db.js'
 import { liveRepliesSnapshot, withLiveReply } from './liveReply.js'
@@ -47,7 +48,7 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
  */
 export type ImportProgress =
   | { phase: 'checking' | 'saving' }
-  | { phase: 'reading'; completed: number; total: number }
+  | { phase: 'reading'; completed: number; total: number; sessionsCompleted: number; sessionsTotal: number }
 
 export const importHistory = (
   file: File,
@@ -55,11 +56,11 @@ export const importHistory = (
 ): Promise<{ count: number; latestId: string | null }> => {
   onProgress?.({ phase: 'checking' })
   return enqueueBackup(async () => {
-    signal?.throwIfAborted()
+    throwIfAborted(signal)
     const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
     const archive = await checkArchiveFormat(file, signal)
-    return replaceHistory(() => importArchive(archive, signal, (completed, total) => {
-      onProgress?.({ phase: 'reading', completed, total })
+    return replaceHistory(() => importArchive(archive, signal, (completed, total, sessionsCompleted, sessionsTotal) => {
+      onProgress?.({ phase: 'reading', completed, total, sessionsCompleted, sessionsTotal })
     }), { signal, onCommit: () => onProgress?.({ phase: 'saving' }) })
   })
 }

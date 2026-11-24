@@ -139,6 +139,7 @@ export const zh = {
   historyImportDescription: '支持 DeepSeek 或本应用导出的对话 ZIP。导入成功后会替换本机全部对话和附件。',
   historyImportChecking: '正在检查文件…',
   historyImportReading: '正在读取：{completed} / {total} 个条目',
+  historyImportSessions: '已处理 {completed} / {total} 个对话',
   historyImportSaving: '正在保存，请勿关闭应用…',
   historyImportCancel: '取消导入',
   historyImportCancelling: '正在取消导入…',

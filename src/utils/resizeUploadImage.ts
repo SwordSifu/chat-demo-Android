@@ -1,8 +1,10 @@
+import { throwIfAborted } from './abort.js'
+
 // Files API 图片长边上限，单位为像素。
 const MAX_IMAGE_EDGE = 4096
 
 const readUploadImage = async (blob: Blob, signal?: AbortSignal) => {
-  signal?.throwIfAborted()
+  throwIfAborted(signal)
   const image = new Image()
   const url = URL.createObjectURL(blob)
   const stop = () => image.removeAttribute('src')
@@ -10,11 +12,11 @@ const readUploadImage = async (blob: Blob, signal?: AbortSignal) => {
   try {
     image.src = url
     await image.decode()
-    signal?.throwIfAborted()
+    throwIfAborted(signal)
     const { naturalWidth: width, naturalHeight: height } = image
     return width && height ? { image, width, height, longestEdge: Math.max(width, height) } : null
   } catch {
-    signal?.throwIfAborted()
+    throwIfAborted(signal)
     return null
   } finally {
     signal?.removeEventListener('abort', stop)
@@ -31,7 +33,7 @@ export const isUploadImageOversized = async (blob: Blob, signal?: AbortSignal) =
 /** 上限内返回原文件，超限生成缩小的上传副本；null 表示无法确认尺寸。 */
 export const resizeUploadImage = async (file: File, signal?: AbortSignal): Promise<File | null> => {
   const dimensions = await readUploadImage(file, signal)
-  signal?.throwIfAborted()
+  throwIfAborted(signal)
   if (!dimensions) {
     return null
   }
@@ -59,7 +61,7 @@ export const resizeUploadImage = async (file: File, signal?: AbortSignal): Promi
         1
       )
     })
-    signal?.throwIfAborted()
+    throwIfAborted(signal)
     // 浏览器可能回退到 PNG，以实际编码确定扩展名。
     const extension = blob.type === 'image/jpeg' ? 'jpg' : blob.type.slice('image/'.length)
     const name = file.name.replace(/\.[^.]*$/, '') + '.' + extension

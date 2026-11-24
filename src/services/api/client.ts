@@ -1,4 +1,5 @@
 import { translate, type TranslationMessage } from '../../i18n/index.js'
+import { throwIfAborted } from '../../utils/abort.js'
 import { resizeUploadImage } from '../../utils/resizeUploadImage.js'
 import { readMessageEvent } from './parseEvent.js'
 import { readServerSentEvents } from './sse.js'
@@ -136,7 +137,7 @@ export const uploadFile = async (
   // 无法确认尺寸时保留既有上传兼容性，让服务端判断原始格式。
   const checkedImage = purpose === null ? await resizeUploadImage(file, signal) : null
   form.append('file', checkedImage ?? file)
-  signal?.throwIfAborted()
+  throwIfAborted(signal)
   const response = await request(`${ANTHROPIC_BASE_URL}/files`, {
     method: 'POST',
     headers: anthropicHeaders(apiKey, true),

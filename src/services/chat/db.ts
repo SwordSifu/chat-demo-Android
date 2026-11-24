@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import { throwIfAborted } from '../../utils/abort.js'
 import { toSessionSummary, type Session, type SessionSummary } from './types.js'
 
 /** IndexedDB 存储结构版本；新增或调整存储、索引时递增。 */
@@ -148,6 +149,9 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
 }
 
 const putFiles = async (store: 'files' | 'filesStaging', files: StoredFile[]) => {
+  if (!files.length) {
+    return
+  }
   const tx = (await getDB()).transaction(store, 'readwrite')
   await Promise.all([...files.map((file) => tx.store.put(file)), tx.done])
 }
@@ -167,8 +171,12 @@ export const clearStaging = async (): Promise<void> => {
   ])
 }
 
-export const addStagingSession = async (session: Session): Promise<void> => {
-  await (await getDB()).add('sessionsStaging', session)
+export const addStagingSessions = async (sessions: Session[]): Promise<void> => {
+  if (!sessions.length) {
+    return
+  }
+  const tx = (await getDB()).transaction('sessionsStaging', 'readwrite')
+  await Promise.all([...sessions.map((session) => tx.store.add(session)), tx.done])
 }
 
 export const saveStagingFiles = (files: StoredFile[]): Promise<void> =>
@@ -177,16 +185,25 @@ export const saveStagingFiles = (files: StoredFile[]): Promise<void> =>
 /** 图片位于会话 JSON 之后；全部读完后回填具体 MIME，保留归档给出的 isImage 标识。 */
 export const updateStagingFileTypes = async (
   types: ReadonlyMap<string, string>,
+  sessionIds: ReadonlySet<string>,
   signal?: AbortSignal
 ): Promise<void> => {
+  throwIfAborted(signal)
+  if (!sessionIds.size) {
+    return
+  }
   const tx = (await getDB()).transaction('sessionsStaging', 'readwrite')
   const done = tx.done
   try {
     await Promise.all([
       (async () => {
-        for (let cursor = await tx.store.openCursor(); cursor; cursor = await cursor.continue()) {
-          signal?.throwIfAborted()
-          const session = cursor.value
+        for (const id of sessionIds) {
+          throwIfAborted(signal)
+          const session = await tx.store.get(id)
+          throwIfAborted(signal)
+          if (!session) {
+            continue
+          }
           let changed = false
           for (const message of session.messages) {
             if (message.role !== 'user') {
@@ -201,7 +218,7 @@ export const updateStagingFileTypes = async (
             }
           }
           if (changed) {
-            await cursor.update(session)
+            await tx.store.put(session)
           }
         }
       })(),

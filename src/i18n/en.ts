@@ -145,6 +145,7 @@ export const en = {
     'Use a chat ZIP exported from DeepSeek or this app. A successful import replaces all chats and attachments on this device.',
   historyImportChecking: 'Checking file…',
   historyImportReading: 'Reading: {completed} of {total} entries',
+  historyImportSessions: 'Chats processed: {completed} of {total}',
   historyImportSaving: 'Saving. Please keep the app open…',
   historyImportCancel: 'Cancel import',
   historyImportCancelling: 'Cancelling import…',

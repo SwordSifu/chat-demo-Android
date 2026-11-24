@@ -1,3 +1,4 @@
+import { throwIfAborted } from '../../utils/abort.js'
 import { getVisibleMessages } from './branches.js'
 import type { Message, Session, SessionSummary } from './types.js'
 import { buildReplyView } from './view.js'
@@ -85,7 +86,7 @@ const searchMessages = async (
     }
     if ((path.length - i) % MESSAGE_BATCH_SIZE === 0) {
       await yieldToUi()
-      signal.throwIfAborted()
+      throwIfAborted(signal)
     }
   }
   return undefined
@@ -129,7 +130,7 @@ export const searchHistoryPage = async (
     return { results, next: null, readError }
   }
   while (cursor < sessions.length && results.length < PAGE_SIZE) {
-    signal.throwIfAborted()
+    throwIfAborted(signal)
     const summary = sessions[cursor++]
     const titleIndex = foldAscii(summary.title).indexOf(query)
     let message: HistorySearchResult['message']
@@ -137,7 +138,7 @@ export const searchHistoryPage = async (
       let session = currentCache(summary, sources)
       if (!session) {
         const stored = await sources.readSession(summary.id)
-        signal.throwIfAborted()
+        throwIfAborted(signal)
         // The user may have opened this session while the read was pending.
         session = currentCache(summary, sources) ?? stored
       }
@@ -147,10 +148,10 @@ export const searchHistoryPage = async (
         readError = true
       }
     } catch {
-      signal.throwIfAborted()
+      throwIfAborted(signal)
       readError = true
     }
-    signal.throwIfAborted()
+    throwIfAborted(signal)
     if (message || titleIndex >= 0) {
       results.push({
         sessionId: summary.id,
@@ -162,6 +163,6 @@ export const searchHistoryPage = async (
       await yieldToUi()
     }
   }
-  signal.throwIfAborted()
+  throwIfAborted(signal)
   return { results, next: cursor < sessions.length ? cursor : null, readError }
 }

@@ -8,6 +8,7 @@ import {
   IconDownloadOutline16,
   IconFollowsystemOutline16,
   IconLightOutline16,
+  IconLoadingOutline16,
   IconSettingsOutline16,
   IconUploadOutline14,
 } from '../base/icons.js'
@@ -47,7 +48,9 @@ import styles from './Settings.module.css'
  */
 export const SettingsDialog = () => {
   const open = useSettingsDialog((state) => state.open)
-  return open ? <SettingsContent /> : null
+  // 关闭弹窗只卸载表单；同一次导入、取消句柄和后台完成结果仍归这里持有。
+  const historyImport = useHistoryImport()
+  return open ? <SettingsContent historyImport={historyImport} /> : null
 }
 
 const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode }[] = [
@@ -60,14 +63,15 @@ const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode
   { value: 'account', label: 'settingDialogAsideAccountOptionLabel', icon: null },
 ]
 
-const SettingsContent = () => {
+type HistoryImport = ReturnType<typeof useHistoryImport>
+
+const SettingsContent = ({ historyImport }: { historyImport: HistoryImport }) => {
   const t = useTranslate()
   const isMobile = useIsMobile()
   // 打开时按调用方指定的分组选中，之后在弹窗内切换
   const [section, setSection] = useState(() => useSettingsDialog.getState().section)
-  // 切换分组不丢失正在输入的 API Key 与导入状态
+  // 切换分组不丢失正在输入的 API Key
   const apiKeyEditor = useApiKeyEditor()
-  const historyImport = useHistoryImport()
   const historyDelete = useHistoryDelete()
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy = historyImport.busy || historyImport.file !== null || historyDelete.busy || replacingHistory
@@ -81,7 +85,8 @@ const SettingsContent = () => {
         className={styles.dialog}
         mainClassName={styles.dialogMain}
         onClose={() => {
-          if (!historyImport.busy && !historyImport.file && !historyDelete.busy && cacheCleanup.canClose()) {
+          if (!historyImport.file && !historyDelete.busy && cacheCleanup.canClose()) {
+            historyImport.dismissResult()
             closeSettings()
           }
         }}
@@ -150,7 +155,7 @@ const SettingsContent = () => {
           )}
         </div>
       </Modal>
-      {historyImport.file || historyImport.progress ? <ImportConfirm historyImport={historyImport} /> : null}
+      {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
       {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
       {cacheCleanup.phase !== 'idle' ? <CacheCleanupConfirm cleanup={cacheCleanup} disabled={historyBusy} /> : null}
     </>
@@ -491,66 +496,57 @@ const TtsVoiceSetting = () => {
   )
 }
 
-/** 确认后原地显示进度，正式保存只可等待完成。 */
-const ImportConfirm = ({
-  historyImport,
-}: {
-  historyImport: ReturnType<typeof useHistoryImport>
+const ImportConfirm = ({ historyImport }: { historyImport: HistoryImport }) => {
+  const t = useTranslate()
+  return (
+    <Modal
+      title={t('historyImportConfirmTitle')}
+      className={styles.importConfirm}
+      onClose={historyImport.dismissConfirm}
+      footer={
+        <>
+          <Button variant="outlined" size="m" autoFocus onClick={historyImport.dismissConfirm}>
+            {t('cancel')}
+          </Button>
+          <Button variant="dangerOutlined" size="m" onClick={() => void historyImport.confirm()}>
+            {t('historyImportConfirm')}
+          </Button>
+        </>
+      }
+    >
+      <div className={styles.importConfirmText}>{t('historyImportConfirmDescription')}</div>
+    </Modal>
+  )
+}
+
+/** 条目数表示实际读取进度；会话数只计已成功暂存的会话。正式保存不可中止。 */
+const ImportProgressRow = ({ progress, cancelling, cancelImport }: {
+  progress: ImportProgress
+  cancelling: boolean
+  cancelImport: () => void
 }) => {
   const t = useTranslate()
-  const { progress, cancelling } = historyImport
   const progressId = useId()
-  const reading = progress?.phase === 'reading' ? progress : null
+  const reading = progress.phase === 'reading' ? progress : null
   const progressText = cancelling
     ? t('historyImportCancelling')
     : reading
       ? t('historyImportReading', { completed: reading.completed, total: reading.total })
-      : t(progress?.phase === 'saving' ? 'historyImportSaving' : 'historyImportChecking')
-
+      : t(progress.phase === 'saving' ? 'historyImportSaving' : 'historyImportChecking')
   return (
-    <Modal
-      title={t(progress ? 'historyImport' : 'historyImportConfirmTitle')}
-      className={styles.importConfirm}
-      onClose={historyImport.dismissConfirm}
-      footer={
-        progress ? (
-          progress.phase !== 'saving' ? (
-            <Button
-              key="cancel-import"
-              variant="outlined"
-              size="m"
-              autoFocus
-              disabled={cancelling}
-              onClick={historyImport.cancelImport}
-            >
-              {t('historyImportCancel')}
-            </Button>
-          ) : null
-        ) : (
-          <>
-            <Button variant="outlined" size="m" autoFocus onClick={historyImport.dismissConfirm}>
-              {t('cancel')}
-            </Button>
-            <Button variant="dangerOutlined" size="m" onClick={() => void historyImport.confirm()}>
-              {t('historyImportConfirm')}
-            </Button>
-          </>
-        )
-      }
-    >
-      {progress ? (
-        <div className={styles.importProgress}>
-          <div id={progressId} role="status">{progressText}</div>
-          <progress
-            aria-labelledby={progressId}
-            max={reading?.total || undefined}
-            value={cancelling || !reading?.total ? undefined : reading.completed}
-          />
-        </div>
-      ) : (
-        <div className={styles.importConfirmText}>{t('historyImportConfirmDescription')}</div>
+    <div className={styles.importProgress} role="group" aria-label={t('historyImport')}>
+      <div id={progressId} role="status">{progressText}</div>
+      {reading && !cancelling && (
+        <span>{t('historyImportSessions', { completed: reading.sessionsCompleted, total: reading.sessionsTotal })}</span>
       )}
-    </Modal>
+      <progress aria-labelledby={progressId} max={reading?.total}
+        value={cancelling || !reading ? undefined : reading.completed} />
+      {progress.phase !== 'saving' && (
+        <Button variant="outlined" size="m" className={styles.cellButton} disabled={cancelling} onClick={cancelImport}>
+          {t('historyImportCancel')}
+        </Button>
+      )}
+    </div>
   )
 }
 
@@ -712,9 +708,15 @@ const useHistoryImport = () => {
     }
   }
 
+  const dismissResult = () => {
+    setStatus(null)
+    setLatestId(null)
+  }
+
   return {
     file,
     busy: progress !== null,
+    dismissResult,
     progress,
     cancelling,
     status,
@@ -740,6 +742,7 @@ const useHistoryImport = () => {
     viewImported: () => {
       if (latestId !== null && !operation.current) {
         selectSession(latestId)
+        dismissResult()
         closeSettings()
       }
     },
@@ -751,7 +754,7 @@ const ImportHistory = ({
   historyImport,
   disabled,
 }: {
-  historyImport: ReturnType<typeof useHistoryImport>
+  historyImport: HistoryImport
   disabled: boolean
 }) => {
   const t = useTranslate()
@@ -759,6 +762,7 @@ const ImportHistory = ({
 
   return (
     <SettingCell
+      className={historyImport.busy ? styles.importing : undefined}
       label={t('historyImport')}
       description={t('historyImportDescription')}
       status={historyImport.status}
@@ -779,11 +783,12 @@ const ImportHistory = ({
             variant="outlined"
             size="m"
             className={clsx(styles.cellButton, styles.uploadButton)}
+            aria-busy={historyImport.busy}
+            aria-label={historyImport.busy ? t('historyImport') : undefined}
             disabled={disabled}
             onClick={() => inputRef.current?.click()}
           >
-            <IconUploadOutline14 />
-            {t('upload')}
+            {historyImport.busy ? <IconLoadingOutline16 /> : <><IconUploadOutline14 />{t('upload')}</>}
           </Button>
           <input
             ref={inputRef}
@@ -798,6 +803,10 @@ const ImportHistory = ({
               }
             }}
           />
+          {historyImport.progress && (
+            <ImportProgressRow progress={historyImport.progress} cancelling={historyImport.cancelling}
+              cancelImport={historyImport.cancelImport} />
+          )}
         </>
       }
     />

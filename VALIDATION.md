@@ -2,6 +2,26 @@
 
 日期：2026-11-18（Asia/Hong_Kong）。上游基线 `5d5dd754ebc1948e977ddb880a9eb5aa25f37b4c`。1.0.6 基于 `android-lite` 上的 1.0.5 预发布；发布分支为 `android-lite`，不改 `main`。对应附件见 [v1.0.6 预发布](https://github.com/SwordSifu/chat-demo-Android/releases/tag/v1.0.6)。
 
+## 1.0.11：同步上游 0.1.4、择优合并历史导入（2026-11-24）
+
+- 采用上游的双读取窗口、流式 JSON/MIME 解码、按会话读取图片、限制批大小的暂存，以及只更新引用相关图片的会话。保留 Android 分支的分块目录、预检复用、条目校验、取消和原子提交；同一个附件 ID 仍选物理位置最早的引用原件。关闭设置后，同一应用页面仍继续导入，重开可查看已读取条目和已暂存会话数。保留旧版移动视口回退，使用兼容旧浏览器的中止助手补齐本地上传等路径，不更改权限、ZIP 或数据库结构。
+- 增加批量上限、重复图归属、过期中止 API、未引用图片 CRC、关闭设置后进度与结果、取消和提交失败回滚的回归。`pnpm type`、`pnpm lint`（141 文件，零警告/错误）和生产构建通过；JS 单测 **79/79**，桌面 Edge 回归 **67/67**（含 3 项可选基准），Android JVM **44/44**（原生代码本次未改，沿用 1.0.10 读数）。
+- release APK **2,237,752 字节**，SHA-256 `3f7fcf92245bac40073b8661dec00139cfb5c300eca5d9e1c029aaf6c26e413f`。离线构建、Release Lint Vital、116 个资源逐字节核对、ZIP 对齐及 APK v2 验签通过。包名 `io.github.swordsifu.dsapichat`，versionCode 12，versionName 1.0.11，minSdk 26，targetSdk 35，不可调试；证书与 v1.0.10 一致，SHA-256 `53b689437132de29ccf69b1aecd928bc635dee47368c36e13ddd8204a3207fd7`；权限仍为 INTERNET、RECORD_AUDIO、MODIFY_AUDIO_SETTINGS。
+- `adb devices -l` 未发现设备；覆盖安装、真实 ZIP 备份导入和真机性能未验证。无真实账户或模型调用。
+
+### 同样本对照
+
+Windows Edge 157.0.4341.46 headless，三个版本使用同样的合成 ZIP 和真实 IndexedDB，每个版本热身一次后取 5 次中位数、轮换运行顺序，使用各自的生产 ZIP/暂存实现。耗时包含预检、解析和暂存，**不含原子提交或 UI 渲染**；不是手机性能数据。分片次数和字节量是 `File.slice` 调用读数，不是磁盘 I/O 或进程内存。
+
+| 合成样本 | Android 1.0.10 | 官方 0.1.4 | Android 1.0.11 |
+| --- | ---: | ---: | ---: |
+| 600 会话 | 1361 ms | 202 ms | 200 ms |
+| 单会话、850 条消息 | 45 ms | 49 ms | 44 ms |
+| 2 会话含 6.75 MiB BMP | 214 ms | 225 ms | 200 ms |
+
+- 600 会话暂存事务为 600 → 19 → 19 次；分片读取 1,809 → 4 → 4 次，分片字节 334,972 → 604,427 → 334,972 B。原子提交独立计时为 230 → 221 → 221 ms。其它小幅耗时变化不据此断言稳定提速。
+- 可用 [同样本对照脚本](scripts/benchmark-history-implementations.mjs) 复测：用 `git worktree add --detach` 检出 Android `73a4a05` 和上游 `cdf9617` 到两个目录，在当前分支运行 `node scripts/benchmark-history-implementations.mjs <旧版目录> <上游目录>`。
+
 ## 1.0.10：移动端动效与边栏手势（2026-11-22）
 
 - 基于 `android-lite` 的 `7ddc701`；类型检查、静态检查和生产前端构建通过。JS 单测 **73/73**；Windows Edge 回归 **64 项通过**，3 项可选导入性能基准未运行。Android JVM 离线重跑 **44/44**。
