@@ -1,0 +1,82 @@
+.details,
+.total {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.details dd,
+.total dd {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.table {
+  width: 100%;
+  margin-top: 14px;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 18px;
+
+  th,
+  td {
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--dsw-alias-border-l2);
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  th:first-child {
+    padding-left: 0;
+    text-align: left;
+  }
+
+  th:last-child,
+  td:last-child {
+    padding-right: 0;
+  }
+
+  th {
+    font-weight: 500;
+  }
+
+  tbody {
+    color: var(--dsw-alias-label-primary);
+  }
+}
+
+.table td,
+.details dd,
+.total dd {
+  font-variant-numeric: tabular-nums;
+}
+
+.total {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+.notice,
+.note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.note {
+  color: var(--dsw-alias-label-secondary);
+}
+
+@media (pointer: coarse), not all and (min-width: 768px) {
+  .trigger {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

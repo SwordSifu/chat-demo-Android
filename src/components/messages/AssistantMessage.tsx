@@ -17,6 +17,7 @@ import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js
 import { ReadAloudButton } from './ReadAloudButton.js'
 import { CopyButton } from './CopyButton.js'
 import { ReplyArea } from './ReplyArea.js'
+import { ReplyUsageButton } from './ReplyUsageButton.js'
 import { useReplyView } from './useReplyView.js'
 import {
   BranchSwitcher,
@@ -159,6 +160,9 @@ export const AssistantMessage = memo(function AssistantMessage({
               }}
             />
           </div>
+          {message.status !== 'pending' && message.status !== 'streaming' ? (
+            <ReplyUsageButton message={message} />
+          ) : null}
           {isLast && canContinueReply(message) ? (
             <Button
               variant="outlined"

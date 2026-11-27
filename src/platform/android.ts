@@ -106,9 +106,27 @@ export const saveNativeApiKey = async (value: string | null): Promise<void> => {
   nativeApiKey = value
 }
 
-/** This bridge action clears only Android's WebView resource cache; it has no web fallback. */
+/** Clears WebView resources and orphaned captures, not live drafts or persistent storage. */
 export const clearWebViewCache = async (): Promise<void> => {
   await nativeCall('clearWebViewCache')
+}
+
+const captureName = /^chatdemo-capture-[0-9a-f]{32}\.jpg$/
+
+/** Only the dedicated capture input may claim a camera temporary file. */
+export const retainCapturedPhoto = async (name: string): Promise<void> => {
+  if (!isAndroid() || !captureName.test(name)) {
+    throw new NativeError('Invalid camera result')
+  }
+  if (await nativeCall<boolean>('retainCapturedPhoto', { name }, 5_000) !== true) {
+    throw new NativeError('Camera result unavailable')
+  }
+}
+
+export const releaseCapturedPhoto = (name: string | undefined): void => {
+  if (name && isAndroid() && captureName.test(name)) {
+    void nativeCall('releaseCapturedPhoto', { name }, 5_000).catch(() => {})
+  }
 }
 
 export const isSaveCancelled = (error: unknown) =>

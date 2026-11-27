@@ -1,3 +1,4 @@
+import { readReplyUsage } from '../../account/replyUsage.js'
 import { BackupError, fail } from './errors.js'
 import {
   EXPORT_FORMAT_VERSION,
@@ -199,9 +200,11 @@ const fragment: Read<Fragment | null> = (value) => {
 
 const message: Read<ChatMessage> = (value) => {
   const item = record(value)
+  const usage = readReplyUsage(item.ds_api_chat_usage_v1)
   return {
     id: count(item.id),
     parent_id: nullable(count)(item.parent_id),
+    ...(usage ? { ds_api_chat_usage_v1: usage } : {}),
     role: oneOf('USER', 'ASSISTANT')(item.role),
     status: oneOf(
       'WIP',

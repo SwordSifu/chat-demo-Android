@@ -1,4 +1,5 @@
 import type { TranslationMessage } from '../../i18n/index.js'
+import type { ReplyUsage } from '../account/replyUsage.js'
 import type { ApiErrorKind } from '../api/client.js'
 import type {
   ChatModel,
@@ -94,6 +95,10 @@ export type AssistantMessage = MessageBranch & {
   stopDetails?: StopDetails
   /** 最近一次请求的用量，续写后更新 */
   usage?: MessageUsage
+  /** Validated final receipt with its request-time rate card; no receipt is fabricated. */
+  replyUsage?: ReplyUsage
+  /** Official archive context total when no per-category receipt was exported. */
+  archiveContextTokens?: number
   error?: {
     /** upload：发送前补传附件失败，请求没有发出 */
     kind: ApiErrorKind | 'upload'

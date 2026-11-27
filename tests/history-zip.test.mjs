@@ -20,7 +20,7 @@ const hook = registerHooks({
       export const saveStagingFiles = (...args) => globalThis.archiveStaging.files(...args)
       export const updateStagingFileTypes = (...args) => globalThis.archiveStaging.types(...args)
     ` }
-    if (url === `${root}i18n/index.ts`) return { format: 'module', shortCircuit: true, source: 'export const translate = key => key' }
+    if (url === `${root}i18n/index.ts`) return { format: 'module', shortCircuit: true, source: 'export const translate = key => key; export const isTranslationKey = () => false' }
     if (url.startsWith(root) && url.endsWith('.ts')) return {
       format: 'module', shortCircuit: true,
       source: stripTypeScriptTypes(readFileSync(new URL(url), 'utf8'), { mode: 'transform' }),
@@ -31,7 +31,37 @@ const hook = registerHooks({
 const { ArchiveError, openArchive, readEntry } = await import('../src/services/chat/history/zipReader.ts')
 const { checkArchiveFormat, importArchive } = await import('../src/services/chat/history/importArchive.ts')
 const { writeArchive } = await import('../src/services/chat/history/zipWriter.ts')
+const { readSessionFile } = await import('../src/services/chat/history/schema.ts')
+const { toLocalSession } = await import('../src/services/chat/history/toLocal.ts')
+globalThis.__API_ORIGIN__ = 'https://api.deepseek.com'
+const { toSessionFile } = await import('../src/services/chat/history/toArchive.ts')
 hook.deregister()
+
+test('usage ZIP extension round-trips rate snapshots and keeps legacy context-only totals', () => {
+  const usage = { model: 'deepseek-flash', hit: 8, miss: 21, output: 7, contextLimit: 1000000,
+    price: { period: 'offPeak', hit: 2, miss: 100, output: 400 } }
+  const createdAt = 1795788000000
+  const session = { id: 'usage-fixture', title: '', createdAt, updatedAt: createdAt,
+    messages: [
+      { id: 'q', role: 'user', content: 'q', files: [], createdAt },
+      { id: 'a', role: 'assistant', status: 'done', stopReason: 'max_tokens', model: 'deepseek-flash',
+        createdAt, blocks: [{ type: 'text', text: 'a' }], prefix: false, replyUsage: usage },
+    ] }
+  const archive = toSessionFile(session, () => null)
+  const row = archive.messages[1]
+  assert.equal(row.accumulated_token_usage, 36)
+  assert.deepEqual(row.ds_api_chat_usage_v1, usage)
+  const back = toLocalSession(readSessionFile(JSON.parse(JSON.stringify(archive)))).session.messages[1]
+  assert.equal(back.status, 'done')
+  assert.equal(back.stopReason, 'max_tokens')
+  assert.deepEqual(back.replyUsage, usage)
+  row.status = 'FINISHED'
+  row.ds_api_chat_usage_v1 = { hit: -8 }
+  const legacy = toLocalSession(readSessionFile(archive)).session
+  assert.equal(legacy.messages[1].archiveContextTokens, 36)
+  assert.equal(legacy.messages[1].replyUsage, undefined)
+  assert.equal(toSessionFile(legacy, () => null).messages[1].accumulated_token_usage, 36)
+})
 
 const encoder = new TextEncoder()
 

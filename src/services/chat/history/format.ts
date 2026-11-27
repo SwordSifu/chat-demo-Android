@@ -6,6 +6,8 @@
  * - 可空字段用 null 表示；可选字段允许缺省。
  */
 
+import type { ReplyUsage } from '../../account/replyUsage.js'
+
 /** 2026-11-11T02:33:23.270Z */
 export type Iso8601Utc = string
 
@@ -59,6 +61,8 @@ export type ChatMessage = {
   search_enabled: boolean
   /** 沿分支累计的上下文 token */
   accumulated_token_usage: number
+  /** Optional DS API Chat extension; official archives and earlier builds omit it. */
+  ds_api_chat_usage_v1?: ReplyUsage
   inserted_at: Iso8601Utc
   /** 按发生顺序排列 */
   fragments: Fragment[]

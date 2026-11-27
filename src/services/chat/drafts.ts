@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { releaseCapturedPhoto } from '../../platform/android.js'
 import type { TranslationMessage } from '../../i18n/index.js'
 import { createId } from '../../utils/id.js'
 import {
@@ -16,6 +17,7 @@ export type DraftAttachment = {
   id: string
   file: File
   isImage: boolean
+  capturedPhoto?: string
 }
 
 type Draft = { text: string; attachments: DraftAttachment[] }
@@ -60,7 +62,8 @@ const upload = (attachment: DraftAttachment, apiKey: string) => {
 export const addDraftFiles = (
   sessionId: string | null,
   files: File[],
-  apiKey: string
+  apiKey: string,
+  capturedPhoto?: string
 ): TranslationMessage | null => {
   if (files.length === 0) {
     return null
@@ -74,6 +77,7 @@ export const addDraftFiles = (
       id: createId(),
       file,
       isImage: isImage(resolveMimeType(file)),
+      capturedPhoto: capturedPhoto === file.name ? capturedPhoto : undefined,
     })
   )
   updateDraft(sessionId, (draft) => ({ ...draft, attachments: [...draft.attachments, ...added] }))
@@ -98,7 +102,7 @@ export const prepareDraftMessage = (draft: Draft, tasks: Record<string, UploadTa
   if (!text && draft.attachments.length === 0) {
     return null
   }
-  const files: (FileAttachment & { serverId: string; blob: Blob })[] = []
+  const files: (FileAttachment & { serverId: string; blob: Blob; capturedPhoto?: string })[] = []
   for (const attachment of draft.attachments) {
     const task = tasks[attachment.id]
     if (task?.status !== 'done' || !task.serverId) {
@@ -113,16 +117,23 @@ export const prepareDraftMessage = (draft: Draft, tasks: Record<string, UploadTa
       isImage: attachment.isImage,
       mimeType: resolveMimeType(attachment.file),
       blob: attachment.file,
+      capturedPhoto: attachment.capturedPhoto,
     })
   }
   return { text, files }
 }
 
+const discardAttachment = (attachment: DraftAttachment) => {
+  cancelUpload(attachment.id)
+  releaseCapturedPhoto(attachment.capturedPhoto)
+}
+
 export const removeDraftAttachment = (sessionId: string | null, attachmentId: string) => {
-  if (!getDraft(sessionId).attachments.some((item) => item.id === attachmentId)) {
+  const attachment = getDraft(sessionId).attachments.find((item) => item.id === attachmentId)
+  if (!attachment) {
     return
   }
-  cancelUpload(attachmentId)
+  discardAttachment(attachment)
   updateDraft(sessionId, (draft) => ({
     ...draft,
     attachments: draft.attachments.filter((item) => item.id !== attachmentId),
@@ -136,13 +147,13 @@ export const clearSentDraft = (sessionId: string | null) => {
 
 /** 删除会话或替换历史成功后，释放尚未发送的草稿及上传任务。 */
 export const clearDraft = (sessionId: string | null) => {
-  getDraft(sessionId).attachments.forEach((attachment) => cancelUpload(attachment.id))
+  getDraft(sessionId).attachments.forEach(discardAttachment)
   updateDraft(sessionId, () => EMPTY_DRAFT)
 }
 
 export const clearAllDrafts = () => {
   for (const draft of useDrafts.getState().drafts.values()) {
-    draft.attachments.forEach((attachment) => cancelUpload(attachment.id))
+    draft.attachments.forEach(discardAttachment)
   }
   useDrafts.setState({ drafts: new Map() })
 }

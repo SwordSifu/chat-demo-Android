@@ -94,12 +94,14 @@ async function installChat(page) {
         send({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '模拟用量回复' } })
         window.__accountChats.push((result) => {
           send({ type: 'content_block_stop', index: 0 })
-          const delta = { stop_reason: 'end_turn' }
+          const delta = { stop_reason: 'end_turn', title: '用量回归会话' }
           send({ type: 'message_delta', delta,
             usage: { input_tokens: 19, output_tokens: 2, cache_read_input_tokens: 5, cache_creation_input_tokens: 0 } })
           send({ type: 'message_delta', delta, usage: result === 'bad'
             ? { input_tokens: -10, output_tokens: 7, cache_read_input_tokens: 8, cache_creation_input_tokens: 1 }
-            : { input_tokens: 20, output_tokens: 7, cache_read_input_tokens: 8, cache_creation_input_tokens: 1 } })
+            : result === 'second'
+              ? { input_tokens: 60, output_tokens: 98, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+              : { input_tokens: 20, output_tokens: 7, cache_read_input_tokens: 8, cache_creation_input_tokens: 1 } })
           if (result !== 'eof') send({ type: 'message_stop' })
           controller.close()
         })
@@ -201,6 +203,54 @@ test('counts only the final valid cumulative usage on completed chat; reload per
   await usage(page).getByRole('button', { name: '确认清空' }).click()
   await expect(todayValues(page)).toHaveText(['0', '0', '0'])
   expect(await page.evaluate((key) => localStorage.getItem(key), usageKey)).toBeNull()
+})
+
+test('reply sheets use final receipts, track the selected branch, and survive reload', async ({ page }) => {
+  const mock = await setup(page)
+  await installChat(page)
+  await page.clock.setFixedTime(new Date('2026-11-27T22:30:00+08:00'))
+  await page.goto('/')
+  await sendChat(page, 0)
+  await finishChat(page, 0)
+  const trigger = page.getByTestId('reply-usage-button')
+  const dialog = page.getByTestId('reply-usage-dialog')
+  const total = dialog.getByTestId('reply-usage-total')
+  await trigger.click()
+  await expect(total).toHaveText('¥0.00004916')
+  await expect(dialog.getByTestId('reply-usage-context')).toContainText('<1%')
+  await expect.poll(() => page.evaluate(() => window.__deepseekAndroidBack())).toBe(true)
+  await expect(dialog).toBeHidden()
+  await expect(trigger).toBeFocused()
+  await page.getByRole('button', { name: '重新生成', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => window.__accountChats.length)).toBe(2)
+  await finishChat(page, 1, 'second')
+  await trigger.click()
+  await expect(total).toHaveText('¥0.000452')
+  await expect(dialog.getByTestId('reply-usage-row')).toHaveCount(2)
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  await page.getByRole('button', { name: '上一个版本', exact: true }).click()
+  await trigger.click()
+  await expect(total).toHaveText('¥0.00004916')
+  expect(mock.requests).toHaveLength(0)
+  await page.reload()
+  await page.getByRole('button', { name: '打开边栏', exact: true }).click()
+  await page.getByText('用量回归会话', { exact: true }).click()
+  await trigger.click()
+  await expect(total).toHaveText('¥0.00004916')
+})
+
+test('a reply without a complete receipt never shows partial tokens as a bill', async ({ page }) => {
+  await setup(page)
+  await installChat(page)
+  await page.goto('/')
+  await sendChat(page, 0)
+  await finishChat(page, 0, 'eof')
+  await page.getByTestId('reply-usage-button').click()
+  const dialog = page.getByTestId('reply-usage-dialog')
+  await expect(dialog.getByText(/用量未返回或记录不完整/)).toBeVisible()
+  await expect(dialog.getByTestId('reply-usage-total')).toHaveText('—')
+  await expect(dialog.getByTestId('reply-usage-row')).toHaveCount(0)
 })
 
 test('only an actual successful key change clears usage and late old-key stream completion cannot restore it', async ({ page }) => {

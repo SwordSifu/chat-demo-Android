@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { isSaveCancelled, saveBlob } from '../../platform/android.js'
 import type { AttachmentView } from '../../utils/attachmentPreview.js'
@@ -19,7 +19,17 @@ export const AttachmentImage = ({ url, name }: { url: string; name: string }) =>
   )
 }
 
-/** 交互层独立于缩略图解码：Android 保存始终读取原件，不读取预览。 */
+const OriginalAttachmentImage = ({ file, name }: { file: Blob; name: string }) => {
+  const [url, setUrl] = useState<string>()
+  useEffect(() => {
+    const source = URL.createObjectURL(file)
+    setUrl(source)
+    return () => URL.revokeObjectURL(source)
+  }, [file])
+  return url ? <AttachmentImage url={url} name={name} /> : null
+}
+
+/** Android 打开大图和保存都使用原件，不读取缩略图。 */
 export const AttachmentAction = ({ name, view }: { name: string; view: AttachmentView }) => {
   const t = useTranslate()
   const [openView, setOpenView] = useState<AttachmentView>()
@@ -60,7 +70,7 @@ export const AttachmentAction = ({ name, view }: { name: string; view: Attachmen
         disabled={view.action === 'save' && saving}
         onClick={() => (view.action === 'preview' ? setOpenView(view) : void saveOriginal())}
       />
-      {view.action === 'preview' && openView === view && view.thumbnail ? (
+      {view.action === 'preview' && openView === view ? (
         <Modal
           title={name}
           closable
@@ -72,7 +82,7 @@ export const AttachmentAction = ({ name, view }: { name: string; view: Attachmen
             </Button>
           }
         >
-          <AttachmentImage url={view.thumbnail} name={name} />
+          <OriginalAttachmentImage file={view.file} name={name} />
         </Modal>
       ) : null}
     </>

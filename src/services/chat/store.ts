@@ -1,11 +1,12 @@
 import { create } from 'zustand'
-import { isAndroid } from '../../platform/android.js'
+import { isAndroid, releaseCapturedPhoto } from '../../platform/android.js'
 import { getAbortReason, throwIfAborted } from '../../utils/abort.js'
 import { createId } from '../../utils/id.js'
 import { isUploadImageOversized } from '../../utils/resizeUploadImage.js'
-import { captureUsageGeneration, parseChatTokenUsage, recordChatUsage, type ChatTokenUsage } from '../account/usage.js'
+import { captureReplyUsage } from '../account/replyUsage.js'
+import { captureUsageGeneration, recordChatUsage } from '../account/usage.js'
 import { ApiError, streamMessage } from '../api/client.js'
-import type { ChatModel, CreateMessageRequest } from '../api/types.js'
+import type { ChatModel, CreateMessageRequest, MessageUsage } from '../api/types.js'
 import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
 import {
   cancelUpload,
@@ -118,7 +119,11 @@ const sameSummary = (a: SessionSummary, b: SessionSummary) =>
 const sessionAccess = new Map<string, number>()
 const unsavedSessions = new Set<string>()
 /** 保存失败时保留原件，重试成功后才释放。 */
-const pendingFiles = new Map<string, db.StoredFile[]>()
+type PendingFile = db.StoredFile & { capturedPhoto?: string }
+const pendingFiles = new Map<string, PendingFile[]>()
+const releasePendingFiles = (files?: PendingFile[]) => {
+  files?.forEach(({ capturedPhoto }) => releaseCapturedPhoto(capturedPhoto))
+}
 const deletingSessions = new Set<string>()
 const deletionTasks = new Set<Promise<boolean>>()
 const streamFlushes = new Map<string, () => void>()
@@ -209,6 +214,7 @@ const persist = (sessionId: string) => {
         }
         if (pendingFiles.get(sessionId) === files) {
           pendingFiles.delete(sessionId)
+          releasePendingFiles(files)
         }
         if (getSession(sessionId) === session && liveRepliesSnapshot().get(sessionId) === liveReply) {
           unsavedSessions.delete(sessionId)
@@ -440,6 +446,7 @@ export const replaceHistory = async (
     }
     sessionAccess.clear()
     unsavedSessions.clear()
+    pendingFiles.forEach(releasePendingFiles)
     pendingFiles.clear()
     clearAllDrafts()
     resetUploadTasks()
@@ -539,6 +546,7 @@ const removeSessionData = async (id: string): Promise<boolean> => {
     sessionLoads.delete(id)
     sessionAccess.delete(id)
     unsavedSessions.delete(id)
+    releasePendingFiles(pendingFiles.get(id))
     pendingFiles.delete(id)
     clearDraft(id)
     set((state) => ({
@@ -639,7 +647,7 @@ export const sendMessage = (targetSessionId: string | null) => {
   if (files.length > 0) {
     pendingFiles.set(sessionId, [
       ...(pendingFiles.get(sessionId) ?? []),
-      ...files.map(({ id, blob }) => ({ id, blob })),
+      ...files.map(({ id, blob, capturedPhoto }) => ({ id, blob, capturedPhoto })),
     ])
   }
   persist(sessionId)
@@ -748,6 +756,9 @@ export const continueReply = (sessionId: string, messageId: string) => {
     status: 'pending',
     stopReason: undefined,
     stopDetails: undefined,
+    usage: undefined,
+    replyUsage: undefined,
+    archiveContextTokens: undefined,
     error: undefined,
   }
   updateReply(sessionId, reply)
@@ -1119,11 +1130,14 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         // An HTTP body already sent to the server cannot be changed by toggling this preference.
         const { apiKey, safetyCheck } = useSettings.getState()
         const usageGeneration = captureUsageGeneration()
-        let finalUsage: ChatTokenUsage | null = null
+        let finalReceipt: MessageUsage | undefined
+        let responseModel: string | undefined
+        const requestModel = initial.model ?? MODEL
+        const requestTime = Date.now()
         const events = streamMessage(
           apiKey ?? '',
           {
-            model: initial.model ?? MODEL,
+            model: requestModel,
             system: SYSTEM_PROMPT,
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
@@ -1135,8 +1149,11 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         )
         const blockIndexes = new Map<number, number>()
         for await (const event of events) {
+          if (event.type === 'message_start' && typeof event.message.model === 'string') {
+            responseModel = event.message.model
+          }
           if (event.type === 'message_delta') {
-            finalUsage = parseChatTokenUsage(event.usage)
+            finalReceipt = event.usage
           }
           receivedContent ||= event.type === 'content_block_start'
           if (
@@ -1162,10 +1179,19 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           }
         }
         // The iterator returns normally only after message_stop. EOF/error/abort don't record.
-        if (finalUsage && !controller.signal.aborted) {
-          recordChatUsage(usageGeneration, finalUsage)
+        if (controller.signal.aborted) {
+          reply = settleReply(reply, 'stopped', Date.now())
+          break
         }
-        reply = settleReply(reply, 'done', Date.now())
+        const replyUsage = captureReplyUsage(finalReceipt, requestModel, responseModel, requestTime)
+        if (replyUsage) {
+          recordChatUsage(usageGeneration, {
+            inputTokens: replyUsage.hit + replyUsage.miss,
+            outputTokens: replyUsage.output,
+            cacheHitTokens: replyUsage.hit,
+          })
+        }
+        reply = settleReply({ ...reply, usage: replyUsage ? finalReceipt : undefined, replyUsage }, 'done', Date.now())
         break
       } catch (error) {
         if (controller.signal.aborted) {
@@ -1195,8 +1221,8 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           continue
         }
         if (error instanceof ApiError && error.kind === 'interrupted' && reply.stopReason) {
-          // 已收到 message_delta 的结束原因，只是缺了结尾的 message_stop
-          reply = settleReply(reply, 'done', Date.now())
+          // Keep the visible answer, but a missing message_stop is not a verified receipt.
+          reply = settleReply({ ...reply, usage: undefined, replyUsage: undefined }, 'done', Date.now())
         } else if (error instanceof ApiError) {
           reply = settleReply(reply, 'error', Date.now(), {
             kind: error.kind,

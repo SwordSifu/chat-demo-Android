@@ -71,7 +71,7 @@ async function setup(page, android) {
 
 async function showFiles(page, draft) {
   if (draft) {
-    await page.locator('input[type=file][multiple]').setInputFiles(fixtures)
+    await page.locator('input[type=file][multiple]:not([accept="image/*"])').setInputFiles(fixtures)
     return
   }
   await page.evaluate(async ({ files, title, missingName }) => {

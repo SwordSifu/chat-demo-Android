@@ -212,6 +212,9 @@ const toAssistant = (message: ChatMessage): AssistantMessage => {
   const id = String(message.id)
   const blocks = toBlocks(message.fragments, id)
   const refused = message.status === 'CONTENT_FILTER'
+  const usage = message.ds_api_chat_usage_v1
+  const maxTokens = message.status === 'INCOMPLETE' && !!usage
+  const status = maxTokens ? 'done' : replyStatus[message.status]
   return {
     id,
     role: 'assistant',
@@ -220,9 +223,12 @@ const toAssistant = (message: ChatMessage): AssistantMessage => {
     thinking: message.thinking_enabled,
     search: message.search_enabled,
     prefix: false,
-    status: replyStatus[message.status],
+    status,
+    ...(status === 'done' && usage ? { replyUsage: usage } : {}),
+    ...(status === 'done' && !usage && message.accumulated_token_usage > 0 &&
+    Number.isSafeInteger(message.accumulated_token_usage) ? { archiveContextTokens: message.accumulated_token_usage } : {}),
     // 拒绝回复丢弃模型正文和思考，保留模板提示与工具步骤。
-    ...(refused ? { stopReason: 'refusal' as const } : {}),
+    ...(refused ? { stopReason: 'refusal' as const } : maxTokens ? { stopReason: 'max_tokens' as const } : {}),
     blocks: refused
       ? blocks.filter(
           (block) => block.type !== 'thinking' && (block.type !== 'text' || block.isTemplate)

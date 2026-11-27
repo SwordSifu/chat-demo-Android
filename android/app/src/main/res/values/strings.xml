@@ -2,4 +2,8 @@
 <resources>
     <string name="app_name">DS API Chat</string>
     <string name="webview_required">Android System WebView 105 or newer is required. Update Android System WebView / Chrome, then reopen DS API Chat.</string>
+    <string name="attachment_camera_unavailable">Camera capture is unavailable or there is not enough space.</string>
+    <string name="attachment_camera_invalid">The camera did not return a usable JPEG photo.</string>
+    <string name="attachment_gallery_unavailable">No image picker is available.</string>
+    <string name="attachment_gallery_too_many">The image picker returned too many items.</string>
 </resources>

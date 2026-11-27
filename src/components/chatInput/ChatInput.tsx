@@ -1,6 +1,7 @@
 import clsx from 'clsx'
-import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import {
+  IconCloseOutline16,
   IconGlobeLanguageOutline14,
   IconPaperclipOutline16,
   IconSendOutline16,
@@ -26,6 +27,8 @@ import { Tooltip } from '../base/Tooltip.js'
 import { ensureApiKey } from '../settings/settingsDialogState.js'
 import { DragMask, useFileDrop } from './DragMask.js'
 import { showToast } from '../base/toastState.js'
+import { isAndroid, releaseCapturedPhoto, retainCapturedPhoto } from '../../platform/android.js'
+import { registerBackHandler } from '../../platform/back.js'
 import { ACCEPT, useUploads } from '../../services/attachments.js'
 import { DraftAttachments } from './DraftAttachments.js'
 import { useVoiceInput } from './useVoiceInput.js'
@@ -53,7 +56,13 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const importingHistory = useChatStore((state) => state.importingHistory)
   const isMobile = useIsMobile()
   const search = useSettings((state) => state.search)
+  const android = isAndroid()
+  const [panelOpen, setPanelOpen] = useState(false)
+  const panelId = useId()
+  const wrapperRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const galleryInputRef = useRef<HTMLInputElement>(null)
+  const cameraInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
 
@@ -74,14 +83,32 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     return () => observer.disconnect()
   }, [t])
 
-  const acceptFiles = (files: File[]) => {
+  const acceptFiles = (files: File[], capturedPhoto?: string) => {
     if (files.length === 0 || useChatStore.getState().importingHistory || !ensureApiKey()) {
+      releaseCapturedPhoto(capturedPhoto)
       return
     }
-    const error = addDraftFiles(sessionId, files, useSettings.getState().apiKey ?? '')
+    const error = addDraftFiles(sessionId, files, useSettings.getState().apiKey ?? '', capturedPhoto)
     if (error) {
+      releaseCapturedPhoto(capturedPhoto)
       showToast(error)
     }
+  }
+  const acceptCapture = async (file: File) => {
+    try {
+      await retainCapturedPhoto(file.name)
+    } catch {
+      releaseCapturedPhoto(file.name)
+      if (wrapperRef.current) {
+        showToast({ key: 'attachmentCaptureUnavailable' })
+      }
+      return
+    }
+    if (!wrapperRef.current || useChatStore.getState().activeId !== sessionId) {
+      releaseCapturedPhoto(file.name)
+      return
+    }
+    acceptFiles([file], file.name)
   }
   const retryFile = useCallback(
     (id: string) => {
@@ -128,6 +155,38 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
 
   // 移动端录音时用频谱替代输入框内容
   const recording = voice.status === 'recording'
+  const showPanel = android && panelOpen && !importingHistory && voice.status === 'idle'
+  useEffect(() => {
+    if (importingHistory || voice.status !== 'idle') {
+      setPanelOpen(false)
+    }
+  }, [importingHistory, voice.status])
+  useEffect(() => {
+    if (!showPanel) {
+      return
+    }
+    const close = () => setPanelOpen(false)
+    const unregister = registerBackHandler(() => {
+      close()
+      return true
+    })
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !wrapperRef.current?.contains(event.target)) {
+        close()
+      }
+    }
+    document.addEventListener('pointerdown', outside, true)
+    return () => {
+      unregister()
+      document.removeEventListener('pointerdown', outside, true)
+    }
+  }, [showPanel])
+  const openPicker = (input: HTMLInputElement | null) => {
+    setPanelOpen(false)
+    if (ensureApiKey()) {
+      input?.click()
+    }
+  }
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
   const canSend = !importingHistory && !streaming && voice.status === 'idle' && draftReady
@@ -154,14 +213,22 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
 
   return (
     <div
+      ref={wrapperRef}
       className={clsx(styles.wrapper, sessionId === null ? styles.home : styles.session)}
+      onKeyDown={(event) => {
+        if (showPanel && event.key === 'Escape') {
+          event.preventDefault()
+          event.stopPropagation()
+          setPanelOpen(false)
+        }
+      }}
       onClick={(event) => {
         if (event.target === event.currentTarget) {
           textareaRef.current?.focus({ preventScroll: true })
         }
       }}
     >
-      <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
+      {!showPanel ? <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} /> : null}
       <div className={styles.textareaWrapper}>
         <textarea
           ref={textareaRef}
@@ -244,10 +311,21 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           <IconButton
             size="m"
             tone="primary"
-            icon={<IconPaperclipOutline16 />}
-            tooltip={t('uploadFile')}
-            disabled={importingHistory}
-            onClick={() => ensureApiKey() && fileInputRef.current?.click()}
+            icon={android ? showPanel ? <IconCloseOutline16 /> : <AttachmentIcon kind="plus" /> : <IconPaperclipOutline16 />}
+            tooltip={t(android ? (showPanel ? 'attachmentClose' : 'attachmentOpen') : 'uploadFile')}
+            disabled={importingHistory || (android && voice.status !== 'idle')}
+            aria-expanded={android ? showPanel : undefined}
+            aria-controls={showPanel ? panelId : undefined}
+            onClick={() => {
+              if (android) {
+                if (!showPanel) {
+                  textareaRef.current?.blur()
+                }
+                setPanelOpen(!showPanel)
+              } else {
+                openPicker(fileInputRef.current)
+              }
+            }}
           />
           <input
             ref={fileInputRef}
@@ -285,7 +363,48 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           )}
         </div>
       </div>
+      {android ? (
+        <>
+          <input ref={galleryInputRef} type="file" accept="image/*" multiple hidden onChange={(event) => {
+            acceptFiles(Array.from(event.currentTarget.files ?? []))
+            event.currentTarget.value = ''
+          }} />
+          <input ref={cameraInputRef} type="file" accept="image/jpeg" capture="environment" hidden onChange={(event) => {
+            const file = event.currentTarget.files?.[0]
+            event.currentTarget.value = ''
+            if (file) {
+              void acceptCapture(file)
+            }
+          }} />
+        </>
+      ) : null}
+      {showPanel ? (
+        <div id={panelId} role="group" aria-label={t('attachmentOpen')} className={styles.attachmentPanel}>
+          <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
+          <div className={styles.attachmentActions}>
+            <button type="button" onClick={() => openPicker(cameraInputRef.current)}>
+              <AttachmentIcon kind="camera" />{t('attachmentCamera')}
+            </button>
+            <button type="button" onClick={() => openPicker(galleryInputRef.current)}>
+              <AttachmentIcon kind="gallery" />{t('attachmentGallery')}
+            </button>
+            <button type="button" onClick={() => openPicker(fileInputRef.current)}>
+              <IconPaperclipOutline16 />{t('attachmentFiles')}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {dragging ? <DragMask /> : null}
     </div>
   )
 }
+
+const AttachmentIcon = ({ kind }: { kind: 'plus' | 'camera' | 'gallery' }) => (
+  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {kind === 'plus' ? <path d="M12 5v14M5 12h14" /> : kind === 'camera' ? (
+      <><path d="M4 7h4l1.5-2h5L16 7h4a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1Z" /><circle cx="12" cy="13" r="3" /></>
+    ) : (
+      <><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="15.5" cy="8.5" r="1.5" /><path d="m3 16 5-4 7 7 3-3 3 3" /></>
+    )}
+  </svg>
+)

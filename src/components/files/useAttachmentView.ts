@@ -18,7 +18,7 @@ export const useAttachmentView = (source: File | string, name: string) => {
     const controller = new AbortController()
     const { source, name, android } = request
     const loadOriginal = () => (typeof source === 'string' ? loadFile(source) : source)
-    void loadAttachmentView(loadOriginal, name, android, controller.signal).then((view) => {
+    void loadAttachmentView(loadOriginal, name, android, controller.signal, android && typeof source !== 'string').then((view) => {
       if (!controller.signal.aborted) {
         setState({ request, view })
       }

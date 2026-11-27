@@ -88,8 +88,13 @@ export const saveSession = async (session: Session, files: StoredFile[] = []): P
   await Promise.all([
     (async () => {
       try {
-        for (const file of files) {
-          await tx.objectStore('files').put(file)
+        const store = tx.objectStore('files')
+        for (const { id, blob } of files) {
+          // Original IDs are immutable. A queued save must not reread a camera URI
+          // that an earlier successful transaction has already made safe to release.
+          if ((await store.getKey(id)) === undefined) {
+            await store.put({ id, blob })
+          }
         }
         await tx.objectStore('sessions').put(session)
         await tx.objectStore('sessionSummaries').put(summary)

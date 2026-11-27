@@ -56,12 +56,42 @@ const readSvgThumbnail = async (blob: Blob, signal: AbortSignal): Promise<string
   }
 }
 
+// Serialize draft thumbnails, including when a batch of images is selected at once.
+let draftThumbnailQueue = Promise.resolve()
+const readDraftThumbnail = (blob: Blob, signal: AbortSignal): Promise<Blob | null> => {
+  const task = draftThumbnailQueue.then(async () => {
+    if (signal.aborted) {
+      return null
+    }
+    const bitmap = await createImageBitmap(blob, { resizeWidth: 128 })
+    try {
+      if (signal.aborted || bitmap.height > 256) {
+        return null
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = bitmap.width
+      canvas.height = bitmap.height
+      const context = canvas.getContext('2d')
+      if (!context) {
+        return null
+      }
+      context.drawImage(bitmap, 0, 0)
+      return await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/webp', 0.8))
+    } finally {
+      bitmap.close()
+    }
+  }).catch(() => null)
+  draftThumbnailQueue = task.then(() => {})
+  return task
+}
+
 /** 原件可能来自草稿或 IndexedDB；组件通过 signal 释放其关联的资源。 */
 export const loadAttachmentView = async (
   loadOriginal: () => Blob | undefined | Promise<Blob | undefined>,
   name: string,
   android: boolean,
-  signal: AbortSignal
+  signal: AbortSignal,
+  compact = false
 ): Promise<AttachmentView | null> => {
   const objectUrl = (blob: Blob) => {
     const url = URL.createObjectURL(blob)
@@ -83,7 +113,9 @@ export const loadAttachmentView = async (
     const raster = !vector && isAttachmentThumbnail(mime)
     // SVG 只作为 img 的 data: 缩略图，不以应用同源的 SVG URL 暴露给导航。
     const thumbnail = raster
-      ? objectUrl(typed)
+      ? compact
+        ? await readDraftThumbnail(typed, signal).then((blob) => blob && !signal.aborted ? objectUrl(blob) : null)
+        : objectUrl(typed)
       : vector && typed.size <= MAX_SVG_THUMBNAIL_BYTES
         ? await readSvgThumbnail(typed, signal).catch(() => null)
         : null

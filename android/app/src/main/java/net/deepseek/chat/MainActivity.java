@@ -50,7 +50,7 @@ import org.json.JSONObject;
 
 /** A single system WebView, with no bundled browser, background service or wake lock. */
 public final class MainActivity extends Activity {
-    private static final int PICK_FILE = 2001, CREATE_FILE = 2002;
+    private static final int CREATE_FILE = 2002;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Map<String, SaveSession> saves = new HashMap<>(); // IO thread only
     private final Set<String> activeIds = new HashSet<>(); // UI thread only
@@ -61,7 +61,7 @@ public final class MainActivity extends Activity {
     private volatile boolean destroyed;
     private volatile int pageGeneration;
     private PendingReply pendingSave;
-    private ValueCallback<Uri[]> pendingFiles;
+    private AttachmentChooser attachments;
     private PermissionRequest pendingMicrophone;
     private final PermissionLifecycle microphoneLifecycle = new PermissionLifecycle();
     private NativeDiagnostics diagnostics;
@@ -69,6 +69,7 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        attachments = new AttachmentChooser(this, state, this::trustedCurrentPage);
         try { diagnostics = new NativeDiagnostics(this); }
         catch (RuntimeException ignored) { /* Diagnostics must not prevent normal app startup. */ }
         root = new FrameLayout(this);
@@ -267,22 +268,8 @@ public final class MainActivity extends Activity {
         }
 
         @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
-            if (!trustedCurrentPage()) { callback.onReceiveValue(null); return true; }
-            if (pendingFiles != null) pendingFiles.onReceiveValue(null);
-            pendingFiles = callback;
-            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE);
-            pick.setType("*/*");
-            String[] types = params.getAcceptTypes();
-            if (types != null && types.length > 0) {
-                java.util.ArrayList<String> valid = new java.util.ArrayList<>();
-                for (String type : types) if (type.matches("[\\w.+*-]+/[\\w.+*-]+")) valid.add(type);
-                if (valid.size() == 1) pick.setType(valid.get(0));
-                else if (valid.size() > 1) pick.putExtra(Intent.EXTRA_MIME_TYPES, valid.toArray(new String[0]));
-            }
-            pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
-            pick.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            try { startActivityForResult(pick, PICK_FILE); }
-            catch (RuntimeException e) { pendingFiles = null; callback.onReceiveValue(null); }
+            if (view != web) callback.onReceiveValue(null);
+            else attachments.show(callback, params);
             return true;
         }
 
@@ -399,12 +386,24 @@ public final class MainActivity extends Activity {
         try {
             String action = string(request, "action");
             if ("saveBegin".equals(action)) { beginSave(request, reply); return; }
+            if ("retainCapturedPhoto".equals(action) || "releaseCapturedPhoto".equals(action)) {
+                String name = string(request, "name");
+                if (request.length() != 3 || !AttachmentPolicy.captureName(name)) {
+                    throw new JSONException("Expected an allocated capture filename");
+                }
+                runOnUiThread(() -> {
+                    if (reply.generation != pageGeneration || !trustedCurrentPage()) return;
+                    reply.success("retainCapturedPhoto".equals(action) ? attachments.retain(name) : attachments.release(name));
+                });
+                return;
+            }
             if ("clearWebViewCache".equals(action)) {
                 if (request.length() != 2) throw new JSONException("clearWebViewCache does not take arguments");
                 runOnUiThread(() -> {
                     if (reply.generation != pageGeneration || !trustedCurrentPage()) return;
                     try {
                         web.clearCache(true);
+                        attachments.purgeOrphans();
                         reply.success(null);
                     } catch (RuntimeException e) {
                         // This operation must not write to the existing diagnostics buffer either.
@@ -516,27 +515,14 @@ public final class MainActivity extends Activity {
 
     @Override public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == PICK_FILE) {
-            ValueCallback<Uri[]> callback = pendingFiles;
-            pendingFiles = null;
-            if (callback == null) return;
-            if (resultCode != RESULT_OK || data == null || !trustedCurrentPage()) { callback.onReceiveValue(null); return; }
-            ClipData clips = data.getClipData();
-            java.util.ArrayList<Uri> uris = new java.util.ArrayList<>();
-            if (clips != null) {
-                for (int i = 0; i < clips.getItemCount(); i++) {
-                    Uri uri = clips.getItemAt(i).getUri();
-                    if (uri != null && "content".equals(uri.getScheme())) uris.add(uri);
-                }
-            } else if (data.getData() != null && "content".equals(data.getData().getScheme())) uris.add(data.getData());
-            callback.onReceiveValue(uris.isEmpty() ? null : uris.toArray(new Uri[0]));
-        } else if (requestCode == CREATE_FILE) {
+        if (attachments.onResult(requestCode, resultCode, data)) return;
+        if (requestCode == CREATE_FILE) {
             PendingReply reply = pendingSave;
             pendingSave = null;
             if (reply == null) return;
             Uri uri = data == null ? null : data.getData();
             if (resultCode != RESULT_OK || uri == null) { reply.error("cancelled", "Save cancelled"); return; }
-            if (!"content".equals(uri.getScheme())) { reply.error("invalid_uri", "Document provider must return a content URI"); return; }
+            if (!attachments.externalContentUri(uri)) { reply.error("invalid_uri", "Document provider must return an external content URI"); return; }
             io.execute(() -> {
                 if (destroyed || reply.generation != pageGeneration) {
                     try { DocumentsContract.deleteDocument(getContentResolver(), uri); } catch (Exception ignored) { }
@@ -556,8 +542,12 @@ public final class MainActivity extends Activity {
     }
 
     private void cancelUiRequests() {
+        cancelSaveAndMicrophone();
+        attachments.resetPage();
+    }
+
+    private void cancelSaveAndMicrophone() {
         if (pendingSave != null) { pendingSave.error("cancelled", "Page closed"); pendingSave = null; }
-        if (pendingFiles != null) { pendingFiles.onReceiveValue(null); pendingFiles = null; }
         cancelPendingMicrophone();
     }
 
@@ -610,10 +600,16 @@ public final class MainActivity extends Activity {
         super.onStop(); // Do not pause timers or abort a streaming text chat.
     }
 
+    @Override protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        attachments.saveState(out);
+    }
+
     @Override public void onDestroy() {
         destroyed = true;
         microphoneLifecycle.stop();
-        cancelUiRequests();
+        cancelSaveAndMicrophone();
+        attachments.close();
         io.execute(() -> { for (SaveSession session : saves.values()) session.cancel(); saves.clear(); });
         io.shutdown();
         if (web != null) {

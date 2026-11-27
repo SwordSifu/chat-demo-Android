@@ -704,7 +704,7 @@ test('image upload uses official Files API and safe in-app preview/save', async 
   }))
   await page.goto('/')
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=', 'base64')
-  await page.locator('input[type=file][multiple]').setInputFiles({ name: 'tiny.png', mimeType: 'image/png', buffer: png })
+  await page.locator('input[type=file][multiple]:not([accept="image/*"])').setInputFiles({ name: 'tiny.png', mimeType: 'image/png', buffer: png })
   await send(page, '描述图片')
   await expect(page.getByText('这是模拟接口的回答。', { exact: true })).toBeVisible()
   expect(requests[0].messages.at(-1).content[0].source.file_id).toBe('file-simulated-image')
@@ -833,7 +833,7 @@ test('Files API resizes only oversized pixels; preview, save and ZIP keep origin
   const tall = await pngFixture(page, 200, 4097)
   const edge = await pngFixture(page, 4096, 80)
   const notes = Buffer.from('original document data')
-  await page.locator('input[type=file][multiple]').setInputFiles([
+  await page.locator('input[type=file][multiple]:not([accept="image/*"])').setInputFiles([
     { name: 'wide.png', mimeType: 'image/png', buffer: wide },
     { name: 'tall.png', mimeType: 'image/png', buffer: tall },
     { name: 'edge.png', mimeType: 'image/png', buffer: edge },
@@ -884,7 +884,7 @@ test('an undecodable new attachment keeps its original upload and is not marked 
   await page.goto('/')
   await expect(page.getByPlaceholder('请输入消息')).toBeVisible()
   const bytes = Buffer.from('synthetic unsupported encoding')
-  await page.locator('input[type=file][multiple]').setInputFiles({ name: 'opaque.tiff', mimeType: 'image/tiff', buffer: bytes })
+  await page.locator('input[type=file][multiple]:not([accept="image/*"])').setInputFiles({ name: 'opaque.tiff', mimeType: 'image/tiff', buffer: bytes })
   await send(page, '检查无法解码的附件')
   await expect(page.getByText('这是模拟接口的回答。', { exact: true })).toBeVisible()
   expect(uploads).toHaveLength(1)

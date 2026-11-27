@@ -60,7 +60,7 @@ const AttachmentItem = ({
   const retryLabel = t('uploadRetry', { message: error ?? t('uploadFileStatusFailed') })
   // 「上传失败」只显示重试图标，其余原因写在图片上：可重试时在图标下方，不可重试时贴底
   const showReason = failed && error !== undefined && error !== t('uploadFileStatusFailed')
-  return image && (view === undefined || view?.thumbnail) ? (
+  return image && (view === undefined || view?.thumbnail || view?.action === 'preview') ? (
     <div
       className={clsx(styles.attachment, failed && styles.attachmentFailed)}
       title={error ?? item.file.name}
